@@ -3,6 +3,9 @@
 pub mod bridge_reserve_verifier;
 pub use bridge_reserve_verifier::BridgeReserveVerifier;
 
+pub mod alert_system;
+pub use alert_system::AlertSystemContract;
+
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Vec};
 
 #[contracttype]
