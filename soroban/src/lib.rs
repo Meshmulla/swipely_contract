@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod liquidity_pool;
+pub mod escrow_contract;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
