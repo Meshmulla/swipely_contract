@@ -2,6 +2,7 @@
 
 pub mod liquidity_pool;
 pub mod reputation_system;
+pub mod multisig_treasury;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
