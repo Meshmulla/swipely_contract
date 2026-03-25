@@ -503,6 +503,8 @@ impl BridgeWatchContract {
             }
         }
         critical
+    }
+
     // Multi-admin role management (issue #25)
     // -----------------------------------------------------------------------
 
