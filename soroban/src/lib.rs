@@ -29,12 +29,53 @@ pub struct PriceRecord {
     pub timestamp: u64,
 }
 
+/// Severity level of a recorded price deviation alert.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviationSeverity {
+    /// Deviation exceeds the low threshold (default > 2 %).
+    Low,
+    /// Deviation exceeds the medium threshold (default > 5 %).
+    Medium,
+    /// Deviation exceeds the high threshold (default > 10 %).
+    High,
+}
+
+/// A price deviation alert stored on-chain for an asset.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviationAlert {
+    pub asset_code: String,
+    pub current_price: i128,
+    pub average_price: i128,
+    /// Deviation expressed in basis points (1 bp = 0.01 %).
+    pub deviation_bps: i128,
+    pub severity: DeviationSeverity,
+    pub timestamp: u64,
+}
+
+/// Per-asset configurable deviation thresholds (in basis points).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviationThreshold {
+    /// Low-severity trigger; default 200 bps (2 %).
+    pub low_bps: i128,
+    /// Medium-severity trigger; default 500 bps (5 %).
+    pub medium_bps: i128,
+    /// High-severity trigger; default 1 000 bps (10 %).
+    pub high_bps: i128,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
     AssetHealth(String),
     PriceRecord(String),
     MonitoredAssets,
+    /// Latest deviation alert recorded for an asset.
+    DeviationAlert(String),
+    /// Admin-configured deviation thresholds for an asset.
+    DeviationThreshold(String),
 }
 
 #[contract]
@@ -130,6 +171,111 @@ impl BridgeWatchContract {
             .instance()
             .get(&DataKey::MonitoredAssets)
             .unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // Price Deviation Detection (issue #23)
+    // -----------------------------------------------------------------------
+
+    /// Set configurable deviation thresholds for an asset (admin only).
+    ///
+    /// All thresholds are expressed in basis points (1 bp = 0.01 %).
+    /// Defaults used when none are configured: Low 200 bps, Medium 500 bps,
+    /// High 1 000 bps.
+    pub fn set_deviation_threshold(
+        env: Env,
+        asset_code: String,
+        low_bps: i128,
+        medium_bps: i128,
+        high_bps: i128,
+    ) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let threshold = DeviationThreshold { low_bps, medium_bps, high_bps };
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeviationThreshold(asset_code), &threshold);
+    }
+
+    /// Compare `current_price` against the last recorded [`PriceRecord`] for
+    /// the asset and store a [`DeviationAlert`] when the deviation exceeds a
+    /// configured threshold.
+    ///
+    /// Returns the alert when a threshold is breached, `None` otherwise.
+    /// Severity levels (default thresholds):
+    /// - **Low** – deviation > 200 bps (2 %)
+    /// - **Medium** – deviation > 500 bps (5 %)
+    /// - **High** – deviation > 1 000 bps (10 %)
+    pub fn check_price_deviation(
+        env: Env,
+        asset_code: String,
+        current_price: i128,
+    ) -> Option<DeviationAlert> {
+        let reference: PriceRecord = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceRecord(asset_code.clone()))
+        {
+            Some(r) => r,
+            None => return None,
+        };
+
+        let average_price = reference.price;
+        if average_price == 0 {
+            return None;
+        }
+
+        let diff = if current_price > average_price {
+            current_price - average_price
+        } else {
+            average_price - current_price
+        };
+        let deviation_bps = diff * 10_000 / average_price;
+
+        let threshold: DeviationThreshold = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DeviationThreshold(asset_code.clone()))
+            .unwrap_or(DeviationThreshold {
+                low_bps: 200,
+                medium_bps: 500,
+                high_bps: 1_000,
+            });
+
+        let severity = if deviation_bps > threshold.high_bps {
+            DeviationSeverity::High
+        } else if deviation_bps > threshold.medium_bps {
+            DeviationSeverity::Medium
+        } else if deviation_bps > threshold.low_bps {
+            DeviationSeverity::Low
+        } else {
+            return None;
+        };
+
+        let alert = DeviationAlert {
+            asset_code: asset_code.clone(),
+            current_price,
+            average_price,
+            deviation_bps,
+            severity,
+            timestamp: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeviationAlert(asset_code), &alert);
+
+        Some(alert)
+    }
+
+    /// Get the latest stored deviation alert for an asset.
+    ///
+    /// Returns `None` if no alert has been recorded.
+    pub fn get_deviation_alerts(env: Env, asset_code: String) -> Option<DeviationAlert> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DeviationAlert(asset_code))
     }
 
     // -----------------------------------------------------------------------
@@ -247,6 +393,117 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
         (env, client, admin)
+    }
+
+    // -----------------------------------------------------------------------
+    // Price deviation detection tests (issue #23)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_price_deviation_no_reference_returns_none() {
+        let (env, client, _admin) = setup();
+        let asset = String::from_str(&env, "USDC");
+        // No stored price record → should return None
+        let result = client.check_price_deviation(&asset, &1_000_000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_price_deviation_below_threshold_returns_none() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        // Store reference price of 1_000_000 (1 %)
+        client.submit_price(&asset, &1_000_000, &source);
+
+        // 1 % deviation is below the default Low threshold of 2 %
+        let result = client.check_price_deviation(&asset, &1_010_000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_price_deviation_low_severity() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        client.submit_price(&asset, &1_000_000, &source);
+
+        // 3 % deviation → Low severity
+        let result = client.check_price_deviation(&asset, &1_030_000);
+        assert!(result.is_some());
+        let alert = result.unwrap();
+        assert_eq!(alert.deviation_bps, 300);
+        assert_eq!(alert.severity, DeviationSeverity::Low);
+    }
+
+    #[test]
+    fn test_price_deviation_medium_severity() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        client.submit_price(&asset, &1_000_000, &source);
+
+        // 7 % deviation → Medium severity
+        let result = client.check_price_deviation(&asset, &1_070_000);
+        assert!(result.is_some());
+        let alert = result.unwrap();
+        assert_eq!(alert.deviation_bps, 700);
+        assert_eq!(alert.severity, DeviationSeverity::Medium);
+    }
+
+    #[test]
+    fn test_price_deviation_high_severity() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        client.submit_price(&asset, &1_000_000, &source);
+
+        // 15 % deviation → High severity
+        let result = client.check_price_deviation(&asset, &1_150_000);
+        assert!(result.is_some());
+        let alert = result.unwrap();
+        assert_eq!(alert.deviation_bps, 1_500);
+        assert_eq!(alert.severity, DeviationSeverity::High);
+    }
+
+    #[test]
+    fn test_get_deviation_alerts_persists_latest() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        client.submit_price(&asset, &1_000_000, &source);
+        client.check_price_deviation(&asset, &1_150_000);
+
+        let stored = client.get_deviation_alerts(&asset);
+        assert!(stored.is_some());
+        assert_eq!(stored.unwrap().severity, DeviationSeverity::High);
+    }
+
+    #[test]
+    fn test_set_custom_deviation_thresholds() {
+        let (env, client, _admin) = setup();
+        env.ledger().set_timestamp(1_000_000);
+        let asset = String::from_str(&env, "USDC");
+        let source = String::from_str(&env, "Stellar DEX");
+
+        // Custom tight thresholds: Low > 50 bps (0.5 %)
+        client.set_deviation_threshold(&asset, &50, &100, &200);
+        client.submit_price(&asset, &1_000_000, &source);
+
+        // 1 % deviation (100 bps) exceeds custom Low threshold of 50 bps
+        let result = client.check_price_deviation(&asset, &1_010_000);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().severity, DeviationSeverity::Low);
     }
 
     // -----------------------------------------------------------------------
