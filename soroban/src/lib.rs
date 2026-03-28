@@ -36,6 +36,7 @@ pub struct AssetHealth {
     pub paused: bool,
     pub active: bool,
     pub timestamp: u64,
+    pub expires_at: u64,
 }
 
 /// Represents a single entry in a batch health score submission.
@@ -86,6 +87,8 @@ pub struct HealthScoreResult {
     pub weights: HealthWeights,
     /// Ledger timestamp when the calculation was performed.
     pub timestamp: u64,
+    /// Timestamp after which the stored calculation result may be cleaned up.
+    pub expires_at: u64,
 }
 
 #[contracttype]
@@ -95,6 +98,7 @@ pub struct PriceRecord {
     pub price: i128,
     pub source: String,
     pub timestamp: u64,
+    pub expires_at: u64,
 }
 
 /// Severity level of a recorded price deviation alert.
@@ -120,6 +124,7 @@ pub struct DeviationAlert {
     pub deviation_bps: i128,
     pub severity: DeviationSeverity,
     pub timestamp: u64,
+    pub expires_at: u64,
 }
 
 /// Per-asset configurable deviation thresholds (in basis points).
@@ -147,6 +152,7 @@ pub struct SupplyMismatch {
     /// `true` when `mismatch_bps` is at or above the configured threshold.
     pub is_critical: bool,
     pub timestamp: u64,
+    pub expires_at: u64,
 }
 
 /// Aggregated liquidity depth for an asset pair across multiple DEX venues.
@@ -169,6 +175,115 @@ pub struct LiquidityDepth {
     pub sources: Vec<String>,
     /// Ledger timestamp when this aggregate was recorded.
     pub timestamp: u64,
+    pub expires_at: u64,
+}
+
+/// Global cleanup and record-retention policy.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpirationPolicy {
+    pub asset_ttl_secs: u64,
+    pub price_ttl_secs: u64,
+    pub deviation_ttl_secs: u64,
+    pub mismatch_ttl_secs: u64,
+    pub liquidity_ttl_secs: u64,
+    pub preserve_latest_history: bool,
+    pub version: u32,
+}
+
+/// Summary of the most recent cleanup run.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupStats {
+    pub last_run_at: u64,
+    pub removed_records: u32,
+    pub trimmed_history_records: u32,
+    pub last_actor: Address,
+}
+
+/// Structured event envelope for filtering and richer indexing.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BridgeWatchEvent {
+    Initialized {
+        admin: Address,
+        timestamp: u64,
+    },
+    HealthSubmitted {
+        actor: Address,
+        asset_code: String,
+        health_score: u32,
+        timestamp: u64,
+    },
+    PriceSubmitted {
+        actor: Address,
+        asset_code: String,
+        price: i128,
+        source: String,
+        timestamp: u64,
+    },
+    AssetRegistrationChanged {
+        actor: Address,
+        asset_code: String,
+        active: bool,
+        paused: bool,
+        timestamp: u64,
+    },
+    ThresholdUpdated {
+        actor: Address,
+        scope: String,
+        value: i128,
+        timestamp: u64,
+    },
+    SupplyMismatchRecorded {
+        actor: Address,
+        bridge_id: String,
+        asset_code: String,
+        mismatch_bps: i128,
+        is_critical: bool,
+        timestamp: u64,
+    },
+    LiquidityDepthRecorded {
+        actor: Address,
+        asset_pair: String,
+        total_liquidity: i128,
+        timestamp: u64,
+    },
+    RoleChanged {
+        actor: Address,
+        target: Address,
+        granted: bool,
+        role: AdminRole,
+        timestamp: u64,
+    },
+    ExpirationPolicyUpdated {
+        actor: Address,
+        scope: String,
+        ttl_secs: u64,
+        timestamp: u64,
+    },
+    ExpirationExtended {
+        actor: Address,
+        scope: String,
+        expires_at: u64,
+        timestamp: u64,
+    },
+    CleanupCompleted {
+        actor: Address,
+        removed_records: u32,
+        trimmed_history_records: u32,
+        timestamp: u64,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ExpirationKind {
+    Asset,
+    Price,
+    Deviation,
+    Mismatch,
+    Liquidity,
+    HealthResult,
 }
 /// Permission roles that can be assigned to admin addresses.
 ///
@@ -271,6 +386,7 @@ pub enum DataKey {
     Admin,
     AssetHealth(String),
     PriceRecord(String),
+    HealthScoreResult(String),
     MonitoredAssets,
     /// Latest deviation alert recorded for an asset.
     DeviationAlert(String),
@@ -308,6 +424,9 @@ pub enum DataKey {
     HealthWeights,
     /// Detailed health score calculation result for an asset.
     HealthScoreResult(String),
+    ExpirationPolicy,
+    AssetExpirationTtl(String),
+    CleanupStats,
     // -----------------------------------------------------------------------
     // Emergency Pause storage keys (issue #96)
     // -----------------------------------------------------------------------
@@ -348,6 +467,17 @@ impl BridgeWatchContract {
         env.storage()
             .instance()
             .set(&DataKey::MonitoredAssets, &assets);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExpirationPolicy, &Self::default_expiration_policy());
+
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::Initialized {
+                admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     /// Submit a health score for a monitored asset.
@@ -368,6 +498,7 @@ impl BridgeWatchContract {
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
         let status = Self::load_asset_health(&env, &asset_code);
         Self::assert_asset_accepting_submissions(&status);
+        let timestamp = env.ledger().timestamp();
 
         let record = AssetHealth {
             asset_code: asset_code.clone(),
@@ -377,7 +508,8 @@ impl BridgeWatchContract {
             bridge_uptime_score,
             paused: status.paused,
             active: status.active,
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+            expires_at: Self::resolve_expiration(&env, &asset_code, ExpirationKind::Asset, timestamp),
         };
 
         env.storage()
@@ -386,6 +518,15 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("health_up"), asset_code), health_score);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::HealthSubmitted {
+                actor: caller,
+                asset_code: record.asset_code,
+                health_score,
+                timestamp,
+            },
+        );
     }
 
     /// Submit health scores for multiple assets in a single transaction.
@@ -416,6 +557,12 @@ impl BridgeWatchContract {
                 paused: status.paused,
                 active: status.active,
                 timestamp,
+                expires_at: Self::resolve_expiration(
+                    &env,
+                    &item.asset_code,
+                    ExpirationKind::Asset,
+                    timestamp,
+                ),
             };
 
             env.storage()
@@ -425,6 +572,15 @@ impl BridgeWatchContract {
             env.events().publish(
                 (symbol_short!("health_up"), item.asset_code.clone()),
                 item.health_score,
+            );
+            Self::emit_contract_event(
+                &env,
+                BridgeWatchEvent::HealthSubmitted {
+                    actor: caller.clone(),
+                    asset_code: item.asset_code.clone(),
+                    health_score: item.health_score,
+                    timestamp,
+                },
             );
         }
     }
@@ -446,20 +602,42 @@ impl BridgeWatchContract {
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
         let status = Self::load_asset_health(&env, &asset_code);
         Self::assert_asset_accepting_submissions(&status);
+        let timestamp = env.ledger().timestamp();
 
         let record = PriceRecord {
             asset_code: asset_code.clone(),
             price,
-            source,
-            timestamp: env.ledger().timestamp(),
+            source: source.clone(),
+            timestamp,
+            expires_at: Self::resolve_expiration(&env, &asset_code, ExpirationKind::Price, timestamp),
         };
 
         env.storage()
             .persistent()
             .set(&DataKey::PriceRecord(asset_code.clone()), &record);
 
+        let mut history: Vec<PriceRecord> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceHistory(asset_code.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        history.push_back(record.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceHistory(asset_code.clone()), &history);
+
         env.events()
             .publish((symbol_short!("price_up"), asset_code), price);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::PriceSubmitted {
+                actor: caller,
+                asset_code: record.asset_code,
+                price,
+                source,
+                timestamp,
+            },
+        );
     }
 
     /// Get the latest health record for an asset
@@ -836,6 +1014,7 @@ impl BridgeWatchContract {
             }
         }
 
+        let timestamp = env.ledger().timestamp();
         let status = AssetHealth {
             asset_code: asset_code.clone(),
             health_score: 0,
@@ -844,7 +1023,8 @@ impl BridgeWatchContract {
             bridge_uptime_score: 0,
             paused: false,
             active: true,
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+            expires_at: Self::resolve_expiration(&env, &asset_code, ExpirationKind::Asset, timestamp),
         };
 
         env.storage()
@@ -858,6 +1038,16 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("asset_reg"), asset_code), true);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::AssetRegistrationChanged {
+                actor: caller,
+                asset_code: status.asset_code,
+                active: true,
+                paused: false,
+                timestamp,
+            },
+        );
     }
 
     /// Temporarily pause monitoring for an asset.
@@ -872,11 +1062,27 @@ impl BridgeWatchContract {
         }
         status.paused = true;
         status.timestamp = env.ledger().timestamp();
+        status.expires_at = Self::resolve_expiration(
+            &env,
+            &asset_code,
+            ExpirationKind::Asset,
+            status.timestamp,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
         env.events()
             .publish((symbol_short!("asset_pau"), asset_code), true);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::AssetRegistrationChanged {
+                actor: caller,
+                asset_code: status.asset_code,
+                active: status.active,
+                paused: true,
+                timestamp: status.timestamp,
+            },
+        );
     }
 
     /// Resume monitoring for a paused asset.
@@ -891,11 +1097,27 @@ impl BridgeWatchContract {
         }
         status.paused = false;
         status.timestamp = env.ledger().timestamp();
+        status.expires_at = Self::resolve_expiration(
+            &env,
+            &asset_code,
+            ExpirationKind::Asset,
+            status.timestamp,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
         env.events()
             .publish((symbol_short!("asset_unp"), asset_code), true);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::AssetRegistrationChanged {
+                actor: caller,
+                asset_code: status.asset_code,
+                active: status.active,
+                paused: false,
+                timestamp: status.timestamp,
+            },
+        );
     }
 
     /// Permanently deregister an asset while retaining historical data.
@@ -909,11 +1131,27 @@ impl BridgeWatchContract {
         status.active = false;
         status.paused = false;
         status.timestamp = env.ledger().timestamp();
+        status.expires_at = Self::resolve_expiration(
+            &env,
+            &asset_code,
+            ExpirationKind::Asset,
+            status.timestamp,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
         env.events()
             .publish((symbol_short!("asset_del"), asset_code), false);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::AssetRegistrationChanged {
+                actor: caller,
+                asset_code: status.asset_code,
+                active: false,
+                paused: false,
+                timestamp: status.timestamp,
+            },
+        );
     }
 
     /// Get all monitored assets
@@ -976,6 +1214,15 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("thresh_up"), asset_code), low_bps);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::ThresholdUpdated {
+                actor: admin,
+                scope: String::from_str(&env, "deviation_threshold"),
+                value: high_bps,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     /// Compare `current_price` against the last recorded [`PriceRecord`] for
@@ -1036,6 +1283,12 @@ impl BridgeWatchContract {
             deviation_bps,
             severity,
             timestamp: env.ledger().timestamp(),
+            expires_at: Self::resolve_expiration(
+                &env,
+                &asset_code,
+                ExpirationKind::Deviation,
+                env.ledger().timestamp(),
+            ),
         };
 
         env.storage()
@@ -1074,9 +1327,16 @@ impl BridgeWatchContract {
             .instance()
             .set(&DataKey::MismatchThreshold, &threshold_bps);
 
-        env.events().publish(
-            (symbol_short!("thresh_up"), symbol_short!("mismatch")),
-            threshold_bps,
+        env.events()
+            .publish((symbol_short!("thresh_up"), symbol_short!("mismatch")), threshold_bps);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::ThresholdUpdated {
+                actor: admin,
+                scope: String::from_str(&env, "mismatch_threshold"),
+                value: threshold_bps,
+                timestamp: env.ledger().timestamp(),
+            },
         );
     }
 
@@ -1119,12 +1379,18 @@ impl BridgeWatchContract {
 
         let record = SupplyMismatch {
             bridge_id: bridge_id.clone(),
-            asset_code,
+            asset_code: asset_code.clone(),
             stellar_supply,
             source_chain_supply,
             mismatch_bps,
             is_critical,
             timestamp: env.ledger().timestamp(),
+            expires_at: Self::resolve_expiration(
+                &env,
+                &bridge_id,
+                ExpirationKind::Mismatch,
+                env.ledger().timestamp(),
+            ),
         };
 
         let mut mismatches: Vec<SupplyMismatch> = env
@@ -1159,6 +1425,17 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("supply_mm"), bridge_id), mismatch_bps);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::SupplyMismatchRecorded {
+                actor: admin,
+                bridge_id: record.bridge_id,
+                asset_code,
+                mismatch_bps,
+                is_critical,
+                timestamp: record.timestamp,
+            },
+        );
     }
 
     /// Return all recorded supply mismatches for a bridge. Public read access.
@@ -1229,6 +1506,7 @@ impl BridgeWatchContract {
         Self::assert_not_globally_paused(&env);
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
+        let timestamp = env.ledger().timestamp();
 
         Self::validate_liquidity_depth_input(
             &env,
@@ -1249,7 +1527,13 @@ impl BridgeWatchContract {
             depth_1_pct,
             depth_5_pct,
             sources,
-            timestamp: env.ledger().timestamp(),
+            timestamp,
+            expires_at: Self::resolve_expiration(
+                &env,
+                &asset_pair,
+                ExpirationKind::Liquidity,
+                timestamp,
+            ),
         };
 
         env.storage()
@@ -1290,6 +1574,15 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("liq_chg"), asset_pair), total_liquidity);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::LiquidityDepthRecorded {
+                actor: admin,
+                asset_pair: record.asset_pair,
+                total_liquidity,
+                timestamp,
+            },
+        );
     }
 
     /// Return the latest aggregated liquidity depth for an asset pair.
@@ -1400,6 +1693,16 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("role_grnt"), grantee), role);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::RoleChanged {
+                actor: granter,
+                target: grantee,
+                granted: true,
+                role,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     /// Revoke a specific role from `target` (SuperAdmin or original admin only).
@@ -1448,6 +1751,371 @@ impl BridgeWatchContract {
 
         env.events()
             .publish((symbol_short!("role_revk"), target), role);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::RoleChanged {
+                actor: revoker,
+                target,
+                granted: false,
+                role,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Configure global expiration TTLs for stored records.
+    pub fn set_expiration_policy(
+        env: Env,
+        caller: Address,
+        asset_ttl_secs: u64,
+        price_ttl_secs: u64,
+        deviation_ttl_secs: u64,
+        mismatch_ttl_secs: u64,
+        liquidity_ttl_secs: u64,
+        preserve_latest_history: bool,
+        version: u32,
+    ) {
+        caller.require_auth();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let authorized =
+            caller == admin || Self::has_role_internal(&env, &caller, AdminRole::SuperAdmin);
+        if !authorized {
+            panic!("only admin or SuperAdmin can set expiration policy");
+        }
+        if version == 0 {
+            panic!("expiration policy version must be greater than 0");
+        }
+
+        let policy = ExpirationPolicy {
+            asset_ttl_secs,
+            price_ttl_secs,
+            deviation_ttl_secs,
+            mismatch_ttl_secs,
+            liquidity_ttl_secs,
+            preserve_latest_history,
+            version,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ExpirationPolicy, &policy);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::ExpirationPolicyUpdated {
+                actor: caller,
+                scope: String::from_str(&env, "global"),
+                ttl_secs: price_ttl_secs,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Configure a per-asset TTL override for asset-bound records.
+    pub fn set_asset_expiration_ttl(
+        env: Env,
+        caller: Address,
+        asset_code: String,
+        ttl_secs: u64,
+    ) {
+        caller.require_auth();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let authorized =
+            caller == admin || Self::has_role_internal(&env, &caller, AdminRole::SuperAdmin);
+        if !authorized {
+            panic!("only admin or SuperAdmin can set asset expiration ttl");
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AssetExpirationTtl(asset_code.clone()), &ttl_secs);
+
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::ExpirationPolicyUpdated {
+                actor: caller,
+                scope: asset_code,
+                ttl_secs,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Return the current expiration policy.
+    pub fn get_expiration_policy(env: Env) -> ExpirationPolicy {
+        Self::load_expiration_policy(&env)
+    }
+
+    /// Return the most recent cleanup summary, if one exists.
+    pub fn get_cleanup_stats(env: Env) -> Option<CleanupStats> {
+        env.storage().instance().get(&DataKey::CleanupStats)
+    }
+
+    /// Manually extend current record expirations for an asset.
+    pub fn extend_expiration(
+        env: Env,
+        caller: Address,
+        asset_code: String,
+        extra_secs: u64,
+    ) {
+        Self::check_permission(&env, &caller, AdminRole::AssetManager);
+        let now = env.ledger().timestamp();
+        let updated_expiration =
+            |current: u64| if current > now { current + extra_secs } else { now + extra_secs };
+
+        if let Some(mut record) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, AssetHealth>(&DataKey::AssetHealth(asset_code.clone()))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage()
+                .persistent()
+                .set(&DataKey::AssetHealth(asset_code.clone()), &record);
+        }
+
+        if let Some(mut record) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PriceRecord>(&DataKey::PriceRecord(asset_code.clone()))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PriceRecord(asset_code.clone()), &record);
+        }
+
+        if let Some(mut record) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, DeviationAlert>(&DataKey::DeviationAlert(asset_code.clone()))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage()
+                .persistent()
+                .set(&DataKey::DeviationAlert(asset_code.clone()), &record);
+        }
+
+        if let Some(mut record) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, HealthScoreResult>(&DataKey::HealthScoreResult(asset_code.clone()))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage()
+                .persistent()
+                .set(&DataKey::HealthScoreResult(asset_code.clone()), &record);
+            Self::emit_contract_event(
+                &env,
+                BridgeWatchEvent::ExpirationExtended {
+                    actor: caller,
+                    scope: asset_code,
+                    expires_at: record.expires_at,
+                    timestamp: now,
+                },
+            );
+        }
+    }
+
+    /// Cleanup expired records and trim expired historical entries.
+    pub fn cleanup_expired_data(env: Env, caller: Address, max_records: u32) -> CleanupStats {
+        caller.require_auth();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let authorized =
+            caller == admin || Self::has_role_internal(&env, &caller, AdminRole::SuperAdmin);
+        if !authorized {
+            panic!("only admin or SuperAdmin can clean expired data");
+        }
+
+        let now = env.ledger().timestamp();
+        let policy = Self::load_expiration_policy(&env);
+        let mut removed_records = 0u32;
+        let mut trimmed_history_records = 0u32;
+
+        let assets: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MonitoredAssets)
+            .unwrap_or_else(|| Vec::new(&env));
+        for asset_code in assets.iter() {
+            if removed_records >= max_records {
+                break;
+            }
+
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, AssetHealth>(&DataKey::AssetHealth(asset_code.clone()))
+            {
+                if Self::is_expired(now, record.expires_at) {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::AssetHealth(asset_code.clone()));
+                    removed_records += 1;
+                }
+            }
+
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, PriceRecord>(&DataKey::PriceRecord(asset_code.clone()))
+            {
+                if removed_records < max_records && Self::is_expired(now, record.expires_at) {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::PriceRecord(asset_code.clone()));
+                    removed_records += 1;
+                }
+            }
+
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, DeviationAlert>(&DataKey::DeviationAlert(asset_code.clone()))
+            {
+                if removed_records < max_records && Self::is_expired(now, record.expires_at) {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::DeviationAlert(asset_code.clone()));
+                    removed_records += 1;
+                }
+            }
+
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, HealthScoreResult>(&DataKey::HealthScoreResult(asset_code.clone()))
+            {
+                if removed_records < max_records && Self::is_expired(now, record.expires_at) {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::HealthScoreResult(asset_code.clone()));
+                    removed_records += 1;
+                }
+            }
+
+            let history: Vec<PriceRecord> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PriceHistory(asset_code.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut filtered_history = Vec::new(&env);
+            for entry in history.iter() {
+                if !Self::is_expired(now, entry.expires_at) {
+                    filtered_history.push_back(entry);
+                } else {
+                    trimmed_history_records += 1;
+                }
+            }
+            if filtered_history.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
+                let last_index = history.len() - 1;
+                if let Some(last_entry) = history.get(last_index) {
+                    filtered_history.push_back(last_entry);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::PriceHistory(asset_code.clone()), &filtered_history);
+        }
+
+        let bridge_ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::BridgeIds)
+            .unwrap_or_else(|| Vec::new(&env));
+        for bridge_id in bridge_ids.iter() {
+            let history: Vec<SupplyMismatch> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::SupplyMismatches(bridge_id.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut filtered = Vec::new(&env);
+            for entry in history.iter() {
+                if !Self::is_expired(now, entry.expires_at) {
+                    filtered.push_back(entry);
+                } else {
+                    trimmed_history_records += 1;
+                }
+            }
+            if filtered.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
+                let last_index = history.len() - 1;
+                if let Some(last_entry) = history.get(last_index) {
+                    filtered.push_back(last_entry);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::SupplyMismatches(bridge_id), &filtered);
+        }
+
+        let pairs: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::LiquidityPairs)
+            .unwrap_or_else(|| Vec::new(&env));
+        for asset_pair in pairs.iter() {
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, LiquidityDepth>(&DataKey::LiquidityDepthCurrent(asset_pair.clone()))
+            {
+                if removed_records < max_records && Self::is_expired(now, record.expires_at) {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::LiquidityDepthCurrent(asset_pair.clone()));
+                    removed_records += 1;
+                }
+            }
+
+            let history: Vec<LiquidityDepth> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LiquidityDepthHistory(asset_pair.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+            let mut filtered = Vec::new(&env);
+            for entry in history.iter() {
+                if !Self::is_expired(now, entry.expires_at) {
+                    filtered.push_back(entry);
+                } else {
+                    trimmed_history_records += 1;
+                }
+            }
+            if filtered.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
+                let last_index = history.len() - 1;
+                if let Some(last_entry) = history.get(last_index) {
+                    filtered.push_back(last_entry);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::LiquidityDepthHistory(asset_pair), &filtered);
+        }
+
+        let stats = CleanupStats {
+            last_run_at: now,
+            removed_records,
+            trimmed_history_records,
+            last_actor: caller.clone(),
+        };
+        env.storage().instance().set(&DataKey::CleanupStats, &stats);
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::CleanupCompleted {
+                actor: caller,
+                removed_records,
+                trimmed_history_records,
+                timestamp: now,
+            },
+        );
+        stats
     }
 
     /// Return `true` if `address` holds `role`.
@@ -1933,6 +2601,60 @@ impl BridgeWatchContract {
             .unwrap_or_else(|| panic!("asset is not registered"))
     }
 
+    fn emit_contract_event(env: &Env, event: BridgeWatchEvent) {
+        env.events().publish((symbol_short!("bw_evt"),), event);
+    }
+
+    fn default_expiration_policy() -> ExpirationPolicy {
+        ExpirationPolicy {
+            asset_ttl_secs: 30 * 24 * 60 * 60,
+            price_ttl_secs: 14 * 24 * 60 * 60,
+            deviation_ttl_secs: 14 * 24 * 60 * 60,
+            mismatch_ttl_secs: 30 * 24 * 60 * 60,
+            liquidity_ttl_secs: 14 * 24 * 60 * 60,
+            preserve_latest_history: true,
+            version: 1,
+        }
+    }
+
+    fn load_expiration_policy(env: &Env) -> ExpirationPolicy {
+        env.storage()
+            .instance()
+            .get(&DataKey::ExpirationPolicy)
+            .unwrap_or(Self::default_expiration_policy())
+    }
+
+    fn resolve_expiration(
+        env: &Env,
+        subject: &String,
+        kind: ExpirationKind,
+        timestamp: u64,
+    ) -> u64 {
+        let policy = Self::load_expiration_policy(env);
+        let asset_override = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::AssetExpirationTtl(subject.clone()))
+            .unwrap_or(0);
+
+        let ttl = match kind {
+            ExpirationKind::Asset | ExpirationKind::Price | ExpirationKind::Deviation | ExpirationKind::HealthResult
+                if asset_override > 0 => asset_override,
+            ExpirationKind::Asset => policy.asset_ttl_secs,
+            ExpirationKind::Price => policy.price_ttl_secs,
+            ExpirationKind::Deviation => policy.deviation_ttl_secs,
+            ExpirationKind::Mismatch => policy.mismatch_ttl_secs,
+            ExpirationKind::Liquidity => policy.liquidity_ttl_secs,
+            ExpirationKind::HealthResult => policy.asset_ttl_secs,
+        };
+
+        timestamp.saturating_add(ttl)
+    }
+
+    fn is_expired(now: u64, expires_at: u64) -> bool {
+        expires_at <= now
+    }
+
     fn assert_asset_accepting_submissions(record: &AssetHealth) {
         if !record.active {
             panic!("asset is deregistered");
@@ -2142,6 +2864,12 @@ impl BridgeWatchContract {
             bridge_uptime_score,
             weights,
             timestamp: env.ledger().timestamp(),
+            expires_at: Self::resolve_expiration(
+                &env,
+                &String::from_str(&env, "health-score-preview"),
+                ExpirationKind::HealthResult,
+                env.ledger().timestamp(),
+            ),
         }
     }
 
@@ -2219,6 +2947,12 @@ impl BridgeWatchContract {
             bridge_uptime_score,
             weights,
             timestamp,
+            expires_at: Self::resolve_expiration(
+                &env,
+                &asset_code,
+                ExpirationKind::HealthResult,
+                timestamp,
+            ),
         };
 
         env.storage()
@@ -2228,8 +2962,19 @@ impl BridgeWatchContract {
             .persistent()
             .set(&DataKey::HealthScoreResult(asset_code.clone()), &result);
 
-        env.events()
-            .publish((symbol_short!("health_up"), asset_code), final_score);
+        env.events().publish(
+            (symbol_short!("health_up"), asset_code),
+            final_score,
+        );
+        Self::emit_contract_event(
+            &env,
+            BridgeWatchEvent::HealthSubmitted {
+                actor: caller,
+                asset_code: record.asset_code,
+                health_score: final_score,
+                timestamp,
+            },
+        );
     }
 
     /// Return the latest calculated health score result for an asset.
