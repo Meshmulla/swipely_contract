@@ -227,8 +227,6 @@ pub struct Statistics {
     pub percentile_75: i128,
     pub timestamp: u64,
 }
-    pub version: u32,
-}
 
 /// Summary of the most recent cleanup run.
 #[contracttype]
