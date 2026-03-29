@@ -908,10 +908,9 @@ impl BridgeWatchContract {
         env.storage()
             .instance()
             .set(&keys::MONITORED_ASSETS, &assets);
-        env.storage().instance().set(
-            &keys::CHECKPOINT_CONFIG,
-            &Self::default_checkpoint_config(),
-        );
+        env.storage()
+            .instance()
+            .set(&keys::CHECKPOINT_CONFIG, &Self::default_checkpoint_config());
         let empty_metadata: Vec<CheckpointMetadata> = Vec::new(&env);
         env.storage()
             .instance()
@@ -925,9 +924,7 @@ impl BridgeWatchContract {
         env.storage()
             .instance()
             .set(&keys::LAST_CHECKPOINT_AT, &0u64);
-        env.storage()
-            .instance()
-            .set(&keys::CONTRACT_VERSION, &1u32);
+        env.storage().instance().set(&keys::CONTRACT_VERSION, &1u32);
         env.storage()
             .instance()
             .set(&keys::UPGRADE_PROPOSAL_COUNTER, &0u64);
@@ -976,9 +973,10 @@ impl BridgeWatchContract {
             ),
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &record);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &record,
+        );
 
         env.events()
             .publish((symbol_short!("health_up"), asset_code), health_score);
@@ -1021,9 +1019,10 @@ impl BridgeWatchContract {
                 ),
             };
 
-            env.storage()
-                .persistent()
-                .set(&format!("asset_health:{}", item.asset_code.clone().into()), &record);
+            env.storage().persistent().set(
+                &format!("asset_health:{}", item.asset_code.clone().into()),
+                &record,
+            );
 
             env.events().publish(
                 (symbol_short!("health_up"), item.asset_code.clone()),
@@ -1075,9 +1074,10 @@ impl BridgeWatchContract {
             ),
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("price_record:{}", asset_code.clone().into()), &record);
+        env.storage().persistent().set(
+            &format!("price_record:{}", asset_code.clone().into()),
+            &record,
+        );
 
         let mut history: Vec<PriceRecord> = env
             .storage()
@@ -1085,9 +1085,10 @@ impl BridgeWatchContract {
             .get(&format!("price_history:{}", asset_code.clone().into()))
             .unwrap_or_else(|| Vec::new(&env));
         history.push_back(record.clone());
-        env.storage()
-            .persistent()
-            .set(&format!("price_history:{}", asset_code.clone().into()), &history);
+        env.storage().persistent().set(
+            &format!("price_history:{}", asset_code.clone().into()),
+            &history,
+        );
 
         env.events()
             .publish((symbol_short!("price_up"), asset_code), price);
@@ -1208,7 +1209,10 @@ impl BridgeWatchContract {
         let last_nonce = env
             .storage()
             .persistent()
-            .get::<String, u64>(&format!("signer_nonce:{}", signature.signer_id.clone().into()))
+            .get::<String, u64>(&format!(
+                "signer_nonce:{}",
+                signature.signer_id.clone().into()
+            ))
             .unwrap_or(0);
         if signature.nonce <= last_nonce {
             panic!("nonce replay detected");
@@ -1471,9 +1475,10 @@ impl BridgeWatchContract {
             ),
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &status);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &status,
+        );
 
         assets.push_back(asset_code.clone());
         env.storage()
@@ -1499,9 +1504,10 @@ impl BridgeWatchContract {
         status.timestamp = env.ledger().timestamp();
         status.expires_at =
             Self::resolve_expiration(&env, &asset_code, ExpirationKind::Asset, status.timestamp);
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &status);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &status,
+        );
         env.events()
             .publish((symbol_short!("asset_pau"), asset_code), true);
         Self::maybe_create_auto_checkpoint(&env, &caller);
@@ -1521,9 +1527,10 @@ impl BridgeWatchContract {
         status.timestamp = env.ledger().timestamp();
         status.expires_at =
             Self::resolve_expiration(&env, &asset_code, ExpirationKind::Asset, status.timestamp);
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &status);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &status,
+        );
         env.events()
             .publish((symbol_short!("asset_unp"), asset_code), true);
         Self::maybe_create_auto_checkpoint(&env, &caller);
@@ -1542,9 +1549,10 @@ impl BridgeWatchContract {
         status.timestamp = env.ledger().timestamp();
         status.expires_at =
             Self::resolve_expiration(&env, &asset_code, ExpirationKind::Asset, status.timestamp);
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &status);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &status,
+        );
         env.events()
             .publish((symbol_short!("asset_del"), asset_code), false);
         Self::maybe_create_auto_checkpoint(&env, &caller);
@@ -1604,9 +1612,10 @@ impl BridgeWatchContract {
             medium_bps,
             high_bps,
         };
-        env.storage()
-            .persistent()
-            .set(&format!("deviation_threshold:{}", asset_code.clone().into()), &threshold);
+        env.storage().persistent().set(
+            &format!("deviation_threshold:{}", asset_code.clone().into()),
+            &threshold,
+        );
 
         env.events()
             .publish((symbol_short!("thresh_up"), asset_code), low_bps);
@@ -1655,7 +1664,10 @@ impl BridgeWatchContract {
         let threshold: DeviationThreshold = env
             .storage()
             .persistent()
-            .get(&format!("deviation_threshold:{}", asset_code.clone().into()))
+            .get(&format!(
+                "deviation_threshold:{}",
+                asset_code.clone().into()
+            ))
             .unwrap_or(DeviationThreshold {
                 low_bps: 200,
                 medium_bps: 500,
@@ -1687,9 +1699,10 @@ impl BridgeWatchContract {
             ),
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("deviation_alert:{}", asset_code.clone().into()), &alert);
+        env.storage().persistent().set(
+            &format!("deviation_alert:{}", asset_code.clone().into()),
+            &alert,
+        );
 
         env.events()
             .publish((symbol_short!("price_dev"), asset_code), deviation_bps);
@@ -1797,9 +1810,10 @@ impl BridgeWatchContract {
             .get(&format!("supply_mismatches:{}", bridge_id.clone().into()))
             .unwrap_or_else(|| Vec::new(&env));
         mismatches.push_back(record);
-        env.storage()
-            .persistent()
-            .set(&format!("supply_mismatches:{}", bridge_id.clone().into()), &mismatches);
+        env.storage().persistent().set(
+            &format!("supply_mismatches:{}", bridge_id.clone().into()),
+            &mismatches,
+        );
 
         // Track bridge ID for cross-bridge queries
         let mut bridge_ids: Vec<String> = env
@@ -1816,9 +1830,7 @@ impl BridgeWatchContract {
         }
         if !found {
             bridge_ids.push_back(bridge_id.clone());
-            env.storage()
-                .instance()
-                .set(&keys::BRIDGEIDS, &bridge_ids);
+            env.storage().instance().set(&keys::BRIDGEIDS, &bridge_ids);
         }
 
         env.events()
@@ -1956,9 +1968,7 @@ impl BridgeWatchContract {
 
         if !found {
             pairs.push_back(asset_pair.clone());
-            env.storage()
-                .instance()
-                .set(&keys::LIQUIDITY_PAIRS, &pairs);
+            env.storage().instance().set(&keys::LIQUIDITY_PAIRS, &pairs);
         }
 
         env.events()
@@ -2245,9 +2255,10 @@ impl BridgeWatchContract {
             .get::<String, AssetHealth>(&format!("asset_health:{}", asset_code.clone().into()))
         {
             record.expires_at = updated_expiration(record.expires_at);
-            env.storage()
-                .persistent()
-                .set(&format!("asset_health:{}", asset_code.clone().into()), &record);
+            env.storage().persistent().set(
+                &format!("asset_health:{}", asset_code.clone().into()),
+                &record,
+            );
         }
 
         if let Some(mut record) = env
@@ -2256,31 +2267,40 @@ impl BridgeWatchContract {
             .get::<String, PriceRecord>(&format!("price_record:{}", asset_code.clone().into()))
         {
             record.expires_at = updated_expiration(record.expires_at);
-            env.storage()
-                .persistent()
-                .set(&format!("price_record:{}", asset_code.clone().into()), &record);
+            env.storage().persistent().set(
+                &format!("price_record:{}", asset_code.clone().into()),
+                &record,
+            );
         }
 
-        if let Some(mut record) = env
-            .storage()
-            .persistent()
-            .get::<String, DeviationAlert>(&format!("deviation_alert:{}", asset_code.clone().into()))
-        {
-            record.expires_at = updated_expiration(record.expires_at);
+        if let Some(mut record) =
             env.storage()
                 .persistent()
-                .set(&format!("deviation_alert:{}", asset_code.clone().into()), &record);
+                .get::<String, DeviationAlert>(&format!(
+                    "deviation_alert:{}",
+                    asset_code.clone().into()
+                ))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage().persistent().set(
+                &format!("deviation_alert:{}", asset_code.clone().into()),
+                &record,
+            );
         }
 
-        if let Some(mut record) = env
-            .storage()
-            .persistent()
-            .get::<String, HealthScoreResult>(&format!("health_score_result:{}", asset_code.clone().into()))
-        {
-            record.expires_at = updated_expiration(record.expires_at);
+        if let Some(mut record) =
             env.storage()
                 .persistent()
-                .set(&format!("health_score_result:{}", asset_code.clone().into()), &record);
+                .get::<String, HealthScoreResult>(&format!(
+                    "health_score_result:{}",
+                    asset_code.clone().into()
+                ))
+        {
+            record.expires_at = updated_expiration(record.expires_at);
+            env.storage().persistent().set(
+                &format!("health_score_result:{}", asset_code.clone().into()),
+                &record,
+            );
             Self::emit_contract_event(
                 &env,
                 BridgeWatchEvent::ExpirationExtended {
@@ -2344,10 +2364,13 @@ impl BridgeWatchContract {
                 }
             }
 
-            if let Some(record) = env
-                .storage()
-                .persistent()
-                .get::<String, DeviationAlert>(&format!("deviation_alert:{}", asset_code.clone().into()))
+            if let Some(record) =
+                env.storage()
+                    .persistent()
+                    .get::<String, DeviationAlert>(&format!(
+                        "deviation_alert:{}",
+                        asset_code.clone().into()
+                    ))
             {
                 if removed_records < max_records && Self::is_expired(now, record.expires_at) {
                     env.storage()
@@ -2357,15 +2380,19 @@ impl BridgeWatchContract {
                 }
             }
 
-            if let Some(record) = env
-                .storage()
-                .persistent()
-                .get::<String, HealthScoreResult>(&format!("health_score_result:{}", asset_code.clone().into()))
+            if let Some(record) =
+                env.storage()
+                    .persistent()
+                    .get::<String, HealthScoreResult>(&format!(
+                        "health_score_result:{}",
+                        asset_code.clone().into()
+                    ))
             {
                 if removed_records < max_records && Self::is_expired(now, record.expires_at) {
-                    env.storage()
-                        .persistent()
-                        .remove(&format!("health_score_result:{}", asset_code.clone().into()));
+                    env.storage().persistent().remove(&format!(
+                        "health_score_result:{}",
+                        asset_code.clone().into()
+                    ));
                     removed_records += 1;
                 }
             }
@@ -2426,9 +2453,10 @@ impl BridgeWatchContract {
                     }
                 }
             }
-            env.storage()
-                .persistent()
-                .set(&format!("supply_mismatches:{}", bridge_id).into(), &filtered);
+            env.storage().persistent().set(
+                &format!("supply_mismatches:{}", bridge_id).into(),
+                &filtered,
+            );
         }
 
         let pairs: Vec<String> = env
@@ -2947,11 +2975,7 @@ impl BridgeWatchContract {
             .instance()
             .get(&keys::PAUSE_REASON)
             .unwrap_or_else(|| String::from_str(&env, ""));
-        let paused_at: u64 = env
-            .storage()
-            .instance()
-            .get(&keys::PAUSED_AT)
-            .unwrap_or(0);
+        let paused_at: u64 = env.storage().instance().get(&keys::PAUSED_AT).unwrap_or(0);
         let unpause_available_at: u64 = env
             .storage()
             .instance()
@@ -3398,9 +3422,10 @@ impl BridgeWatchContract {
             enabled,
         };
 
-        env.storage()
-            .instance()
-            .set(&format!("retention_policy:{}", data_type.clone().into()), &policy);
+        env.storage().instance().set(
+            &format!("retention_policy:{}", data_type.clone().into()),
+            &policy,
+        );
 
         env.events().publish(
             (
@@ -3515,9 +3540,10 @@ impl BridgeWatchContract {
 
             total_deleted += deleted;
             total_archived += archived;
-            env.storage()
-                .instance()
-                .set(&format!("last_cleanup_at:{}", data_type.clone().into()), &now);
+            env.storage().instance().set(
+                &format!("last_cleanup_at:{}", data_type.clone().into()),
+                &now,
+            );
 
             if deleted > 0 || archived > 0 {
                 env.events().publish(
@@ -3575,9 +3601,10 @@ impl BridgeWatchContract {
         let (deleted, archived) =
             Self::cleanup_data_type_internal(&env, &data_type, &policy, run_budget);
         let now = env.ledger().timestamp();
-        env.storage()
-            .instance()
-            .set(&format!("last_cleanup_at:{}", data_type.clone().into()), &now);
+        env.storage().instance().set(
+            &format!("last_cleanup_at:{}", data_type.clone().into()),
+            &now,
+        );
 
         if deleted > 0 || archived > 0 {
             env.events().publish(
@@ -4563,12 +4590,14 @@ impl BridgeWatchContract {
             timestamp,
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("asset_health:{}", asset_code.clone().into()), &record);
-        env.storage()
-            .persistent()
-            .set(&format!("health_score_result:{}", asset_code.clone().into()), &result);
+        env.storage().persistent().set(
+            &format!("asset_health:{}", asset_code.clone().into()),
+            &record,
+        );
+        env.storage().persistent().set(
+            &format!("health_score_result:{}", asset_code.clone().into()),
+            &result,
+        );
 
         env.events()
             .publish((symbol_short!("health_up"), asset_code), final_score);
@@ -4709,9 +4738,10 @@ impl BridgeWatchContract {
                 env.storage()
                     .persistent()
                     .remove(&format!("price_record:{}", asset_code.clone().into()));
-                env.storage()
-                    .persistent()
-                    .remove(&format!("health_score_result:{}", asset_code.clone().into()));
+                env.storage().persistent().remove(&format!(
+                    "health_score_result:{}",
+                    asset_code.clone().into()
+                ));
             }
         }
 
@@ -4745,9 +4775,10 @@ impl BridgeWatchContract {
                     &asset.health_result,
                 );
             } else {
-                env.storage()
-                    .persistent()
-                    .remove(&format!("health_score_result:{}", asset.asset_code.clone().into()));
+                env.storage().persistent().remove(&format!(
+                    "health_score_result:{}",
+                    asset.asset_code.clone().into()
+                ));
             }
         }
 
@@ -4870,9 +4901,10 @@ impl BridgeWatchContract {
     fn initialize_retention_policies(env: &Env) {
         for data_type in Self::retention_data_types(env).iter() {
             let policy = Self::default_retention_policy(data_type.clone());
-            env.storage()
-                .instance()
-                .set(&format!("retention_policy:{}", data_type.clone().into()), &policy);
+            env.storage().instance().set(
+                &format!("retention_policy:{}", data_type.clone().into()),
+                &policy,
+            );
             env.storage()
                 .instance()
                 .set(&format!("last_cleanup_at:{}", data_type).into(), &0u64);
@@ -4991,9 +5023,10 @@ impl BridgeWatchContract {
                 continue;
             }
 
-            env.storage()
-                .persistent()
-                .set(&format!("supply_mismatches:{}", bridge_id.clone().into()), &kept);
+            env.storage().persistent().set(
+                &format!("supply_mismatches:{}", bridge_id.clone().into()),
+                &kept,
+            );
 
             if policy.archive_before_delete {
                 let mut archived_records: Vec<SupplyMismatch> = env
@@ -5126,7 +5159,8 @@ impl BridgeWatchContract {
                         .get(&format!("checkpoint_snapshot:{}", metadata.checkpoint_id).into());
                     if let Some(snapshot) = archived_snapshot {
                         env.storage().persistent().set(
-                            &format!("archived_checkpoint_snapshot:{}", metadata.checkpoint_id).into(),
+                            &format!("archived_checkpoint_snapshot:{}", metadata.checkpoint_id)
+                                .into(),
                             &snapshot,
                         );
                     }
@@ -5216,9 +5250,10 @@ impl BridgeWatchContract {
                 &policy,
                 policy.max_deletions_per_run,
             );
-            env.storage()
-                .instance()
-                .set(&format!("last_cleanup_at:{}", data_type.clone().into()), &now);
+            env.storage().instance().set(
+                &format!("last_cleanup_at:{}", data_type.clone().into()),
+                &now,
+            );
 
             if deleted > 0 || archived > 0 {
                 env.events().publish(
@@ -5369,10 +5404,9 @@ impl BridgeWatchContract {
                 .storage()
                 .persistent()
                 .get(&format!("price_record:{}", asset_code.clone().into()));
-            let health_result_opt: Option<HealthScoreResult> = env
-                .storage()
-                .persistent()
-                .get(&format!("health_score_result:{}", asset_code.clone().into()));
+            let health_result_opt: Option<HealthScoreResult> = env.storage().persistent().get(
+                &format!("health_score_result:{}", asset_code.clone().into()),
+            );
 
             let default_price = PriceRecord {
                 asset_code: asset_code.clone(),
@@ -5425,9 +5459,10 @@ impl BridgeWatchContract {
             restored_from,
         };
 
-        env.storage()
-            .persistent()
-            .set(&format!("checkpoint_snapshot:{}", next_id).into(), &snapshot);
+        env.storage().persistent().set(
+            &format!("checkpoint_snapshot:{}", next_id).into(),
+            &snapshot,
+        );
 
         let mut metadata_list = Self::load_checkpoint_metadata(env);
         metadata_list.push_back(metadata.clone());
