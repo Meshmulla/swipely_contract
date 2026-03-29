@@ -860,7 +860,7 @@ impl BridgeWatchContract {
             .set(&DataKey::CheckpointMetadataList, &empty_metadata);
         env.storage()
             .instance()
-            .set(&DataKey::ArchivedCheckpointMetadataList, &empty_metadata);
+            .set(&DataKey::ArchivedCheckpointMeta, &empty_metadata);
         env.storage()
             .instance()
             .set(&DataKey::CheckpointCounter, &0u64);
@@ -5096,14 +5096,14 @@ impl BridgeWatchContract {
             let mut archived_metadata: Vec<CheckpointMetadata> = env
                 .storage()
                 .instance()
-                .get(&DataKey::ArchivedCheckpointMetadataList)
+                .get(&DataKey::ArchivedCheckpointMeta)
                 .unwrap_or_else(|| Vec::new(env));
             for metadata in removed_metadata.iter() {
                 archived_metadata.push_back(metadata);
             }
             env.storage()
                 .instance()
-                .set(&DataKey::ArchivedCheckpointMetadataList, &archived_metadata);
+                .set(&DataKey::ArchivedCheckpointMeta, &archived_metadata);
         }
 
         (deleted, archived)
@@ -5253,7 +5253,7 @@ impl BridgeWatchContract {
         let archived_metadata: Vec<CheckpointMetadata> = env
             .storage()
             .instance()
-            .get(&DataKey::ArchivedCheckpointMetadataList)
+            .get(&DataKey::ArchivedCheckpointMeta)
             .unwrap_or_else(|| Vec::new(env));
 
         StorageUsageEntry {
