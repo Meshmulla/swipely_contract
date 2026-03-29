@@ -198,6 +198,7 @@ pub struct ExpirationPolicy {
     pub mismatch_ttl_secs: u64,
     pub liquidity_ttl_secs: u64,
     pub preserve_latest_history: bool,
+}
 
 /// Time period for statistical analysis.
 #[contracttype]
