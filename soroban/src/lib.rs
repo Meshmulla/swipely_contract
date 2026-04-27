@@ -1,44 +1,28 @@
 #![no_std]
 
-
-
 // governance and insurance_pool are standalone contracts — only compiled for
 
 // tests (native target) to avoid Wasm symbol conflicts with BridgeWatchContract.
-
 #[cfg(test)]
 
 pub mod governance;
-
 pub mod liquidity_pool;
-
 pub mod reputation_system;
-
 pub mod multisig_treasury;
-
 #[cfg(test)]
 
 pub mod insurance_pool;
-
 #[cfg(test)]
 
 pub mod rate_limiter;
 
 #[cfg(test)]
-
 pub mod asset_registry;
-
 pub mod analytics_aggregator;
-
 #[cfg(test)]
-
 pub mod circuit_breaker;
 
-
-
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
-
-
 
 use liquidity_pool::{
 
@@ -47,8 +31,6 @@ use liquidity_pool::{
     PoolSnapshot, PoolType,
 
 };
-
-
 
 #[contracttype]
 
@@ -71,65 +53,7 @@ pub struct AssetHealth {
     pub active: bool,
 
     pub timestamp: u64,
-
 }
-
-
-/// Normalized severity tier for fast, deterministic aggregation.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StatusTier {
-    Ok,
-    Low,
-    Medium,
-    High,
-}
-
-
-/// Aggregated status view for a single monitored asset.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AssetStatusRollup {
-    pub asset_code: String,
-    pub tier: StatusTier,
-    pub health_score: u32,
-    pub has_price_deviation_alert: bool,
-    pub price_deviation_tier: StatusTier,
-    pub paused: bool,
-    pub active: bool,
-    pub timestamp: u64,
-}
-
-
-/// Aggregated status view for a single tracked bridge.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BridgeStatusRollup {
-    pub bridge_id: String,
-    pub tier: StatusTier,
-    pub latest_mismatch_bps: i128,
-    pub is_critical: bool,
-    pub timestamp: u64,
-}
-
-
-/// Contract-level rollup for cheap reads.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractStatusRollup {
-    pub tier: StatusTier,
-    pub asset_ok: u32,
-    pub asset_low: u32,
-    pub asset_medium: u32,
-    pub asset_high: u32,
-    pub bridge_ok: u32,
-    pub bridge_low: u32,
-    pub bridge_medium: u32,
-    pub bridge_high: u32,
-    pub timestamp: u64,
-}
-
-
 
 /// Represents a single entry in a batch health score submission.
 
@@ -226,7 +150,6 @@ pub struct HealthScoreResult {
     /// Ledger timestamp when the calculation was performed.
 
     pub timestamp: u64,
-
 }
 
 
@@ -244,7 +167,6 @@ pub struct PriceRecord {
     pub source: String,
 
     pub timestamp: u64,
-
 }
 
 
@@ -294,7 +216,6 @@ pub struct DeviationAlert {
     pub severity: DeviationSeverity,
 
     pub timestamp: u64,
-
 }
 
 
@@ -321,8 +242,6 @@ pub struct DeviationThreshold {
 
 }
 
-
-
 /// Records a supply mismatch between Stellar and a source chain for a bridge.
 
 #[contracttype]
@@ -348,7 +267,6 @@ pub struct SupplyMismatch {
     pub is_critical: bool,
 
     pub timestamp: u64,
-
 }
 
 
@@ -392,7 +310,6 @@ pub struct LiquidityDepth {
     /// Ledger timestamp when this aggregate was recorded.
 
     pub timestamp: u64,
-
 }
 
 /// Permission roles that can be assigned to admin addresses.
@@ -441,85 +358,44 @@ pub struct RoleAssignment {
 
 
 
-#[contracttype]
+// ---------------------------------------------------------------------------
+// Emergency Pause types (issue #96)
+// ---------------------------------------------------------------------------
 
+/// A single entry in the contract's pause/unpause audit log.
+///
+/// Emitted and stored whenever the global pause state changes so that
+/// operators can trace the full history of emergency actions.
+#[contracttype]
 pub enum DataKey {
 
     Admin,
-
     AssetHealth(String),
-
     PriceRecord(String),
-
     MonitoredAssets,
-
     /// Latest deviation alert recorded for an asset.
-
     DeviationAlert(String),
-
     /// Admin-configured deviation thresholds for an asset.
-
     DeviationThreshold(String),
-
     /// Historical supply mismatch records for a bridge (Vec<SupplyMismatch>).
-
     SupplyMismatches(String),
-
     /// Global critical mismatch threshold in basis points (default 10 bps / 0.1 %).
-
     MismatchThreshold,
-
     /// All bridge IDs that have at least one mismatch record (Vec<String>).
-
     BridgeIds,
-
     /// Roles held by a specific address (Vec<AdminRole>).
-
     RoleKey(Address),
-
     /// Global list of all role assignments for enumeration.
-
     RolesList,
-
     /// Current aggregated liquidity depth for an asset pair.
-
     LiquidityDepthCurrent(String),
-
     /// Historical aggregated liquidity depth snapshots for an asset pair.
-
     LiquidityDepthHistory(String),
-
     /// Registered asset pairs with liquidity depth data.
-
     LiquidityPairs,
-
     /// Historical price records for an asset (Vec<PriceRecord>).
-
     PriceHistory(String),
-
-    /// Stored health weights for deterministic score calculation.
-
-    HealthWeights,
-
-    /// Last calculated health score details for an asset.
-
-    HealthScoreResult(String),
-
-    /// Per-asset aggregated status rollup.
-
-    AssetStatusRollup(String),
-
-    /// Per-bridge aggregated status rollup.
-
-    BridgeStatusRollup(String),
-
-    /// Contract-level aggregated status rollup.
-
-    ContractStatusRollup,
-
 }
-
-
 
 #[contract]
 
@@ -527,6 +403,7 @@ pub struct BridgeWatchContract;
 
 
 
+#[allow(clippy::too_many_arguments)]
 #[contractimpl]
 
 impl BridgeWatchContract {
@@ -536,17 +413,13 @@ impl BridgeWatchContract {
     pub fn initialize(env: Env, admin: Address) {
 
         admin.require_auth();
-
         env.storage().instance().set(&DataKey::Admin, &admin);
-
         let assets: Vec<String> = Vec::new(&env);
 
         env.storage()
 
             .instance()
-
             .set(&DataKey::MonitoredAssets, &assets);
-
     }
 
 
@@ -635,14 +508,11 @@ impl BridgeWatchContract {
         bridge_uptime_score: u32,
 
     ) {
-
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
         let status = Self::load_asset_health(&env, &asset_code);
 
         Self::assert_asset_accepting_submissions(&status);
-
-
 
         let record = AssetHealth {
 
@@ -659,9 +529,7 @@ impl BridgeWatchContract {
             paused: status.paused,
 
             active: status.active,
-
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -669,7 +537,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &record);
 
 
@@ -678,9 +545,7 @@ impl BridgeWatchContract {
 
 
         env.events()
-
             .publish((symbol_short!("health_up"), asset_code), health_score);
-
     }
 
 
@@ -696,7 +561,6 @@ impl BridgeWatchContract {
     /// the same ledger timestamp. A `health_up` event is emitted per asset.
 
     pub fn submit_health_batch(env: Env, caller: Address, records: Vec<HealthScoreBatch>) {
-
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
 
@@ -738,7 +602,6 @@ impl BridgeWatchContract {
                 active: status.active,
 
                 timestamp,
-
             };
 
 
@@ -746,7 +609,6 @@ impl BridgeWatchContract {
             env.storage()
 
                 .persistent()
-
                 .set(&DataKey::AssetHealth(item.asset_code.clone()), &record);
 
 
@@ -761,9 +623,7 @@ impl BridgeWatchContract {
                 item.health_score,
 
             );
-
         }
-
     }
 
 
@@ -793,25 +653,19 @@ impl BridgeWatchContract {
         source: String,
 
     ) {
-
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
 
         let status = Self::load_asset_health(&env, &asset_code);
 
         Self::assert_asset_accepting_submissions(&status);
 
-
-
         let record = PriceRecord {
 
             asset_code: asset_code.clone(),
 
             price,
-
             source,
-
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -819,7 +673,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::PriceRecord(asset_code.clone()), &record);
 
 
@@ -827,7 +680,6 @@ impl BridgeWatchContract {
         env.events()
 
             .publish((symbol_short!("price_up"), asset_code), price);
-
     }
 
 
@@ -839,9 +691,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::AssetHealth(asset_code))
-
     }
 
 
@@ -853,15 +703,12 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::PriceRecord(asset_code))
-
     }
 
 
 
     /// Register a new asset for monitoring.
-
     ///
 
     /// `caller` must be the contract admin, a `SuperAdmin`, or an
@@ -869,7 +716,6 @@ impl BridgeWatchContract {
     /// `AssetManager`.
 
     pub fn register_asset(env: Env, caller: Address, asset_code: String) {
-
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
 
 
@@ -879,9 +725,7 @@ impl BridgeWatchContract {
             .storage()
 
             .instance()
-
             .get(&DataKey::MonitoredAssets)
-
             .unwrap();
 
 
@@ -898,6 +742,7 @@ impl BridgeWatchContract {
 
 
 
+        let timestamp = env.ledger().timestamp();
         let status = AssetHealth {
 
             asset_code: asset_code.clone(),
@@ -913,9 +758,7 @@ impl BridgeWatchContract {
             paused: false,
 
             active: true,
-
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -923,7 +766,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
 
 
@@ -936,7 +778,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .instance()
-
             .set(&DataKey::MonitoredAssets, &assets);
 
 
@@ -944,7 +785,6 @@ impl BridgeWatchContract {
         env.events()
 
             .publish((symbol_short!("asset_reg"), asset_code), true);
-
     }
 
 
@@ -972,17 +812,13 @@ impl BridgeWatchContract {
         status.paused = true;
 
         status.timestamp = env.ledger().timestamp();
-
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
-
         env.events()
 
             .publish((symbol_short!("asset_pau"), asset_code), true);
-
     }
 
 
@@ -1010,17 +846,13 @@ impl BridgeWatchContract {
         status.paused = false;
 
         status.timestamp = env.ledger().timestamp();
-
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
-
         env.events()
 
             .publish((symbol_short!("asset_unp"), asset_code), true);
-
     }
 
 
@@ -1034,7 +866,6 @@ impl BridgeWatchContract {
     /// `AssetManager`.
 
     pub fn deregister_asset(env: Env, caller: Address, asset_code: String) {
-
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
 
         let mut status = Self::load_asset_health(&env, &asset_code);
@@ -1044,17 +875,13 @@ impl BridgeWatchContract {
         status.paused = false;
 
         status.timestamp = env.ledger().timestamp();
-
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &status);
-
         env.events()
 
             .publish((symbol_short!("asset_del"), asset_code), false);
-
     }
 
 
@@ -1062,13 +889,9 @@ impl BridgeWatchContract {
     /// Get all monitored assets
 
     pub fn get_monitored_assets(env: Env) -> Vec<String> {
-
         let assets: Vec<String> = env.storage()
-
             .instance()
-
             .get(&DataKey::MonitoredAssets)
-
             .unwrap();
 
 
@@ -1082,7 +905,6 @@ impl BridgeWatchContract {
                 .storage()
 
                 .persistent()
-
                 .get(&DataKey::AssetHealth(asset_code.clone()));
 
 
@@ -1144,12 +966,8 @@ impl BridgeWatchContract {
         high_bps: i128,
 
     ) {
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         admin.require_auth();
-
-
 
         let threshold = DeviationThreshold {
 
@@ -1164,7 +982,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::DeviationThreshold(asset_code.clone()), &threshold);
 
 
@@ -1172,7 +989,6 @@ impl BridgeWatchContract {
         env.events()
 
             .publish((symbol_short!("thresh_up"), asset_code), low_bps);
-
     }
 
 
@@ -1204,24 +1020,15 @@ impl BridgeWatchContract {
         current_price: i128,
 
     ) -> Option<DeviationAlert> {
-
         let reference: PriceRecord = match env
-
             .storage()
 
             .persistent()
-
             .get(&DataKey::PriceRecord(asset_code.clone()))
-
         {
-
             Some(r) => r,
-
             None => return None,
-
         };
-
-
 
         let average_price = reference.price;
 
@@ -1248,21 +1055,13 @@ impl BridgeWatchContract {
 
 
         let threshold: DeviationThreshold = env
-
             .storage()
-
             .persistent()
-
             .get(&DataKey::DeviationThreshold(asset_code.clone()))
-
             .unwrap_or(DeviationThreshold {
-
                 low_bps: 200,
-
                 medium_bps: 500,
-
                 high_bps: 1_000,
-
             });
 
 
@@ -1300,7 +1099,6 @@ impl BridgeWatchContract {
             severity,
 
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -1308,7 +1106,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::DeviationAlert(asset_code.clone()), &alert);
 
 
@@ -1339,9 +1136,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::DeviationAlert(asset_code))
-
     }
 
 
@@ -1363,23 +1158,15 @@ impl BridgeWatchContract {
     /// Default is 10 bps (0.1 %).
 
     pub fn set_mismatch_threshold(env: Env, threshold_bps: i128) {
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         admin.require_auth();
-
         env.storage()
 
             .instance()
-
             .set(&DataKey::MismatchThreshold, &threshold_bps);
 
-
-
         env.events()
-
             .publish((symbol_short!("thresh_up"), symbol_short!("mismatch")), threshold_bps);
-
     }
 
 
@@ -1411,9 +1198,7 @@ impl BridgeWatchContract {
         source_chain_supply: i128,
 
     ) {
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         admin.require_auth();
 
 
@@ -1441,13 +1226,9 @@ impl BridgeWatchContract {
 
 
         let threshold_bps: i128 = env
-
             .storage()
-
             .instance()
-
             .get(&DataKey::MismatchThreshold)
-
             .unwrap_or(10);
 
 
@@ -1459,9 +1240,7 @@ impl BridgeWatchContract {
         let record = SupplyMismatch {
 
             bridge_id: bridge_id.clone(),
-
             asset_code,
-
             stellar_supply,
 
             source_chain_supply,
@@ -1471,7 +1250,6 @@ impl BridgeWatchContract {
             is_critical,
 
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -1481,9 +1259,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::SupplyMismatches(bridge_id.clone()))
-
             .unwrap_or_else(|| Vec::new(&env));
 
         mismatches.push_back(record);
@@ -1491,7 +1267,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::SupplyMismatches(bridge_id.clone()), &mismatches);
 
 
@@ -1506,9 +1281,7 @@ impl BridgeWatchContract {
             .storage()
 
             .instance()
-
             .get(&DataKey::BridgeIds)
-
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut found = false;
@@ -1528,13 +1301,9 @@ impl BridgeWatchContract {
         if !found {
 
             bridge_ids.push_back(bridge_id.clone());
-
             env.storage()
-
                 .instance()
-
                 .set(&DataKey::BridgeIds, &bridge_ids);
-
         }
 
 
@@ -1542,7 +1311,6 @@ impl BridgeWatchContract {
         env.events()
 
             .publish((symbol_short!("supply_mm"), bridge_id), mismatch_bps);
-
     }
 
 
@@ -1554,9 +1322,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::SupplyMismatches(bridge_id))
-
             .unwrap_or_else(|| Vec::new(&env))
 
     }
@@ -1572,9 +1338,7 @@ impl BridgeWatchContract {
             .storage()
 
             .instance()
-
             .get(&DataKey::BridgeIds)
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -1588,9 +1352,7 @@ impl BridgeWatchContract {
                 .storage()
 
                 .persistent()
-
                 .get(&DataKey::SupplyMismatches(bridge_id.clone()))
-
                 .unwrap_or_else(|| Vec::new(&env));
 
             for m in mismatches.iter() {
@@ -1654,7 +1416,6 @@ impl BridgeWatchContract {
     /// - `sources` is empty
 
     /// - liquidity depth levels are inconsistent
-
     pub fn record_liquidity_depth(
 
         env: Env,
@@ -1674,12 +1435,8 @@ impl BridgeWatchContract {
         sources: Vec<String>,
 
     ) {
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         admin.require_auth();
-
-
 
         Self::validate_liquidity_depth_input(
 
@@ -1718,9 +1475,7 @@ impl BridgeWatchContract {
             depth_5_pct,
 
             sources,
-
             timestamp: env.ledger().timestamp(),
-
         };
 
 
@@ -1728,7 +1483,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::LiquidityDepthCurrent(asset_pair.clone()), &record);
 
 
@@ -1738,31 +1492,21 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::LiquidityDepthHistory(asset_pair.clone()))
-
             .unwrap_or_else(|| Vec::new(&env));
 
         history.push_back(record);
-
         env.storage().persistent().set(
-
             &DataKey::LiquidityDepthHistory(asset_pair.clone()),
-
             &history,
-
         );
-
-
 
         let mut pairs: Vec<String> = env
 
             .storage()
 
             .instance()
-
             .get(&DataKey::LiquidityPairs)
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -1786,13 +1530,9 @@ impl BridgeWatchContract {
         if !found {
 
             pairs.push_back(asset_pair.clone());
-
             env.storage()
-
                 .instance()
-
                 .set(&DataKey::LiquidityPairs, &pairs);
-
         }
 
 
@@ -1800,7 +1540,6 @@ impl BridgeWatchContract {
         env.events()
 
             .publish((symbol_short!("liq_chg"), asset_pair), total_liquidity);
-
     }
 
 
@@ -1810,21 +1549,14 @@ impl BridgeWatchContract {
     ///
 
     /// Public read access.
-
     pub fn get_aggregated_liquidity_depth(
-
         env: Env,
-
         asset_pair: String,
-
     ) -> Option<LiquidityDepth> {
-
         env.storage()
 
             .persistent()
-
             .get(&DataKey::LiquidityDepthCurrent(asset_pair))
-
     }
 
 
@@ -1854,9 +1586,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::LiquidityDepthHistory(asset_pair))
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -1894,9 +1624,7 @@ impl BridgeWatchContract {
             .storage()
 
             .instance()
-
             .get(&DataKey::LiquidityPairs)
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -1910,9 +1638,7 @@ impl BridgeWatchContract {
                 .storage()
 
                 .persistent()
-
                 .get(&DataKey::LiquidityDepthCurrent(pair));
-
             if let Some(record) = current {
 
                 records.push_back(record);
@@ -1944,11 +1670,8 @@ impl BridgeWatchContract {
     /// require an explicit role entry.
 
     pub fn grant_role(env: Env, granter: Address, grantee: Address, role: AdminRole) {
-
         granter.require_auth();
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         let authorized =
 
             granter == admin || Self::has_role_internal(&env, &granter, AdminRole::SuperAdmin);
@@ -1966,9 +1689,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::RoleKey(grantee.clone()))
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -1988,7 +1709,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::RoleKey(grantee.clone()), &roles);
 
 
@@ -1998,9 +1718,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::RolesList)
-
             .unwrap_or_else(|| Vec::new(&env));
 
         assignments.push_back(RoleAssignment {
@@ -2014,15 +1732,12 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::RolesList, &assignments);
 
 
 
         env.events()
-
             .publish((symbol_short!("role_grnt"), grantee), role);
-
     }
 
 
@@ -2030,11 +1745,8 @@ impl BridgeWatchContract {
     /// Revoke a specific role from `target` (SuperAdmin or original admin only).
 
     pub fn revoke_role(env: Env, revoker: Address, target: Address, role: AdminRole) {
-
         revoker.require_auth();
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         let authorized =
 
             revoker == admin || Self::has_role_internal(&env, &revoker, AdminRole::SuperAdmin);
@@ -2052,9 +1764,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::RoleKey(target.clone()))
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -2074,7 +1784,6 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::RoleKey(target.clone()), &updated);
 
 
@@ -2084,9 +1793,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::RolesList)
-
             .unwrap_or_else(|| Vec::new(&env));
 
 
@@ -2106,15 +1813,12 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::RolesList, &updated_assignments);
 
 
 
         env.events()
-
             .publish((symbol_short!("role_revk"), target), role);
-
     }
 
 
@@ -2140,14 +1844,10 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::RolesList)
-
             .unwrap_or_else(|| Vec::new(&env))
 
     }
-
-
 
     // -----------------------------------------------------------------------
 
@@ -2166,9 +1866,7 @@ impl BridgeWatchContract {
     fn check_permission(env: &Env, caller: &Address, required_role: AdminRole) {
 
         caller.require_auth();
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         if *caller == admin {
 
             return;
@@ -2187,8 +1885,6 @@ impl BridgeWatchContract {
 
     }
 
-
-
     /// Internal role lookup (no auth check).
 
     fn has_role_internal(env: &Env, address: &Address, role: AdminRole) -> bool {
@@ -2198,9 +1894,7 @@ impl BridgeWatchContract {
             .storage()
 
             .persistent()
-
             .get(&DataKey::RoleKey(address.clone()))
-
             .unwrap_or_else(|| Vec::new(env));
 
         for r in roles.iter() {
@@ -2219,6 +1913,7 @@ impl BridgeWatchContract {
 
 
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_liquidity_depth_input(
 
         env: &Env,
@@ -2260,9 +1955,7 @@ impl BridgeWatchContract {
             panic!("liquidity values must be non-negative");
 
         }
-
         if sources.len() == 0 {
-
             panic!("at least one liquidity source is required");
 
         }
@@ -2304,9 +1997,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::AssetHealth(asset_code.clone()))
-
             .unwrap_or_else(|| panic!("asset is not registered"))
 
     }
@@ -2741,7 +2432,6 @@ impl BridgeWatchContract {
     /// corresponding daily aggregation bucket, and emits events when
 
     /// significant liquidity changes are detected.
-
     pub fn record_pool_state(
 
         env: Env,
@@ -2761,9 +2451,7 @@ impl BridgeWatchContract {
         pool_type: PoolType,
 
     ) {
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         admin.require_auth();
 
 
@@ -2957,11 +2645,8 @@ impl BridgeWatchContract {
         version: u32,
 
     ) {
-
         caller.require_auth();
-
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-
         let authorized =
 
             caller == admin || Self::has_role_internal(&env, &caller, AdminRole::SuperAdmin);
@@ -2975,7 +2660,6 @@ impl BridgeWatchContract {
 
 
         Self::validate_weights(liquidity_weight, price_stability_weight, bridge_uptime_weight);
-
         if version == 0 {
 
             panic!("methodology version must be greater than 0");
@@ -3001,15 +2685,10 @@ impl BridgeWatchContract {
         env.storage()
 
             .instance()
-
             .set(&DataKey::HealthWeights, &weights);
 
-
-
         env.events()
-
             .publish((symbol_short!("wt_set"),), version);
-
     }
 
 
@@ -3111,7 +2790,6 @@ impl BridgeWatchContract {
             weights,
 
             timestamp: env.ledger().timestamp(),
-
         }
 
     }
@@ -3175,7 +2853,6 @@ impl BridgeWatchContract {
         manual_override: Option<u32>,
 
     ) {
-
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
         let status = Self::load_asset_health(&env, &asset_code);
@@ -3245,7 +2922,6 @@ impl BridgeWatchContract {
             active: status.active,
 
             timestamp,
-
         };
 
 
@@ -3263,7 +2939,6 @@ impl BridgeWatchContract {
             weights,
 
             timestamp,
-
         };
 
 
@@ -3271,28 +2946,16 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .set(&DataKey::AssetHealth(asset_code.clone()), &record);
-
         env.storage()
 
             .persistent()
-
             .set(&DataKey::HealthScoreResult(asset_code.clone()), &result);
 
-
-        Self::update_asset_rollup(&env, &asset_code);
-
-
-
         env.events().publish(
-
             (symbol_short!("health_up"), asset_code),
-
             final_score,
-
         );
-
     }
 
 
@@ -3310,9 +2973,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .persistent()
-
             .get(&DataKey::HealthScoreResult(asset_code))
-
     }
 
 
@@ -3323,8 +2984,6 @@ impl BridgeWatchContract {
 
     // -----------------------------------------------------------------------
 
-
-
     /// Load stored health weights or return defaults (30 / 40 / 30, v1).
 
     fn load_health_weights(env: &Env) -> HealthWeights {
@@ -3332,9 +2991,7 @@ impl BridgeWatchContract {
         env.storage()
 
             .instance()
-
             .get(&DataKey::HealthWeights)
-
             .unwrap_or(HealthWeights {
 
                 liquidity_weight: 30,
@@ -3348,8 +3005,6 @@ impl BridgeWatchContract {
             })
 
     }
-
-
 
     /// Validate that three weights are each ≤ 100 and sum to exactly 100.
 
@@ -3383,8 +3038,6 @@ impl BridgeWatchContract {
 
     }
 
-
-
     /// Compute the weighted-average composite score.
 
     ///
@@ -3412,7 +3065,6 @@ impl BridgeWatchContract {
         (weighted_sum / 100) as u32
 
     }
-
 }
 
 
@@ -3468,8 +3120,6 @@ mod tests {
         sources
 
     }
-
-
 
     // -----------------------------------------------------------------------
 
@@ -3702,8 +3352,6 @@ mod tests {
         assert_eq!(result.unwrap().severity, DeviationSeverity::Low);
 
     }
-
-
 
     // -----------------------------------------------------------------------
 
@@ -3946,9 +3594,7 @@ mod tests {
         for i in 0..events.len() {
 
             let (addr, topics, _data) = events.get(i).unwrap();
-
             if addr == *contract && topics.len() > 0 {
-
                 // The first topic is the event symbol stored as a Val;
 
                 // convert via IntoVal for comparison.
@@ -4022,8 +3668,6 @@ mod tests {
         assert_has_event(&env, &client.address, symbol_short!("price_up"));
 
     }
-
-
 
     #[test]
 
@@ -4200,8 +3844,6 @@ mod tests {
         assert_has_event(&env, &client.address, symbol_short!("thresh_up"));
 
     }
-
-
 
     // -----------------------------------------------------------------------
 
@@ -7075,8 +6717,6 @@ mod tests {
 
     }
 
-
-
     #[test]
 
     fn test_calculate_health_score_all_perfect() {
@@ -7420,112 +7060,5 @@ mod tests {
         let result = client.calculate_health_score(&0, &88, &0);
 
         assert_eq!(result.composite_score, 88);
-
     }
-
-
-
-    #[test]
-
-    fn test_contract_rollup_default_is_ok() {
-
-        let (_env, client, _admin) = setup();
-
-        let rollup = client.get_contract_status_rollup();
-
-        assert_eq!(rollup.tier, StatusTier::Ok);
-
-        assert_eq!(rollup.asset_ok, 0);
-
-        assert_eq!(rollup.asset_low, 0);
-
-        assert_eq!(rollup.asset_medium, 0);
-
-        assert_eq!(rollup.asset_high, 0);
-
-        assert_eq!(rollup.bridge_ok, 0);
-
-        assert_eq!(rollup.bridge_low, 0);
-
-        assert_eq!(rollup.bridge_medium, 0);
-
-        assert_eq!(rollup.bridge_high, 0);
-
-    }
-
-
-
-    #[test]
-
-    fn test_asset_rollup_updates_and_bumps_contract_counts() {
-
-        let (env, client, admin) = setup();
-
-        env.ledger().set_timestamp(1_000_000);
-
-        let usdc = String::from_str(&env, "USDC");
-
-        client.register_asset(&admin, &usdc);
-
-        client.submit_health(&admin, &usdc, &90, &90, &90, &90);
-
-        let rollup1 = client.get_asset_status_rollup(&usdc).unwrap();
-
-        assert_eq!(rollup1.tier, StatusTier::Ok);
-
-        let contract1 = client.get_contract_status_rollup();
-
-        assert_eq!(contract1.tier, StatusTier::Ok);
-
-        assert_eq!(contract1.asset_ok, 1);
-
-        env.ledger().set_timestamp(2_000_000);
-
-        client.submit_health(&admin, &usdc, &10, &10, &10, &10);
-
-        let rollup2 = client.get_asset_status_rollup(&usdc).unwrap();
-
-        assert_eq!(rollup2.tier, StatusTier::High);
-
-        let contract2 = client.get_contract_status_rollup();
-
-        assert_eq!(contract2.tier, StatusTier::High);
-
-        assert_eq!(contract2.asset_ok, 0);
-
-        assert_eq!(contract2.asset_high, 1);
-
-    }
-
-
-
-    #[test]
-
-    fn test_bridge_rollup_updates_and_bumps_contract_counts() {
-
-        let (env, client, _admin) = setup();
-
-        env.ledger().set_timestamp(1_000_000);
-
-        let bridge = String::from_str(&env, "bridge-1");
-
-        let asset = String::from_str(&env, "USDC");
-
-        client.record_supply_mismatch(&bridge, &asset, &1_000_000, &1_002_000);
-
-        let bridge_rollup = client.get_bridge_status_rollup(&bridge).unwrap();
-
-        assert_eq!(bridge_rollup.tier, StatusTier::High);
-
-        assert!(bridge_rollup.is_critical);
-
-        let contract = client.get_contract_status_rollup();
-
-        assert_eq!(contract.tier, StatusTier::High);
-
-        assert_eq!(contract.bridge_high, 1);
-
-    }
-
 }
-

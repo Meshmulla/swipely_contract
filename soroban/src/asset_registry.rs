@@ -65,6 +65,8 @@ pub enum RegistryError {
     DuplicatePool = 15,
     AssetPaused = 16,
     AssetDeprecated = 17,
+    AssetNotWhitelisted = 18,
+    AssetAlreadyWhitelisted = 19,
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +301,8 @@ pub enum DataKey {
     CategoryIndex(AssetCategory),
     /// Assets filtered by status (Vec<String>).
     StatusIndex(AssetStatus),
+    /// Whitelist of permitted asset codes (Vec<String>). Admin-only writes.
+    Whitelist,
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +351,20 @@ impl AssetRegistryContract {
         url: String,
     ) -> Result<(), RegistryError> {
         Self::require_admin(&env, &admin)?;
+
+        // Enforce whitelist: asset_code must be whitelisted before registration.
+        // An empty whitelist is treated as open — no restriction applies.
+        let whitelist: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !whitelist.is_empty() {
+            let whitelisted = whitelist.iter().any(|item| item == asset_code);
+            if !whitelisted {
+                return Err(RegistryError::AssetNotWhitelisted);
+            }
+        }
 
         // Ensure not already registered
         if env
@@ -431,11 +449,7 @@ impl AssetRegistryContract {
             .set(&DataKey::AssetList, &asset_list);
 
         // Update category index
-        Self::add_to_index(
-            &env,
-            &DataKey::CategoryIndex(category),
-            &asset_code,
-        );
+        Self::add_to_index(&env, &DataKey::CategoryIndex(category), &asset_code);
 
         // Update status index
         Self::add_to_index(
@@ -516,11 +530,7 @@ impl AssetRegistryContract {
         metadata.updated_at = env.ledger().timestamp();
 
         // Add to new category index
-        Self::add_to_index(
-            &env,
-            &DataKey::CategoryIndex(new_category),
-            &asset_code,
-        );
+        Self::add_to_index(&env, &DataKey::CategoryIndex(new_category), &asset_code);
 
         let reason = String::from_str(&env, "Category updated");
         Self::save_with_version(
@@ -593,14 +603,14 @@ impl AssetRegistryContract {
         let mut metadata = Self::get_asset_or_err(&env, &asset_code)?;
 
         // Validate lifecycle transition
-        let valid = match (&metadata.status, &new_status) {
-            (AssetStatus::PendingReview, AssetStatus::Active) => true,
-            (AssetStatus::Active, AssetStatus::Paused) => true,
-            (AssetStatus::Paused, AssetStatus::Active) => true,
-            (AssetStatus::Active, AssetStatus::Deprecated) => true,
-            (AssetStatus::Paused, AssetStatus::Deprecated) => true,
-            _ => false,
-        };
+        let valid = matches!(
+            (&metadata.status, &new_status),
+            (AssetStatus::PendingReview, AssetStatus::Active)
+                | (AssetStatus::Active, AssetStatus::Paused)
+                | (AssetStatus::Paused, AssetStatus::Active)
+                | (AssetStatus::Active, AssetStatus::Deprecated)
+                | (AssetStatus::Paused, AssetStatus::Deprecated)
+        );
         if !valid {
             return Err(RegistryError::InvalidLifecycleTransition);
         }
@@ -611,11 +621,7 @@ impl AssetRegistryContract {
             &DataKey::StatusIndex(metadata.status.clone()),
             &asset_code,
         );
-        Self::add_to_index(
-            &env,
-            &DataKey::StatusIndex(new_status.clone()),
-            &asset_code,
-        );
+        Self::add_to_index(&env, &DataKey::StatusIndex(new_status.clone()), &asset_code);
 
         metadata.status = new_status;
         metadata.version += 1;
@@ -886,6 +892,106 @@ impl AssetRegistryContract {
     }
 
     // =======================================================================
+    // Asset whitelisting
+    // =======================================================================
+
+    /// Add an asset code to the whitelist (admin only).
+    ///
+    /// Whitelisted assets are the only ones that may be registered via
+    /// `register_asset`. Emits an `ar_wl_add` event on success.
+    pub fn whitelist_add(
+        env: Env,
+        admin: Address,
+        asset_code: String,
+    ) -> Result<(), RegistryError> {
+        Self::require_admin(&env, &admin)?;
+
+        let mut whitelist: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        for item in whitelist.iter() {
+            if item == asset_code {
+                return Err(RegistryError::AssetAlreadyWhitelisted);
+            }
+        }
+
+        whitelist.push_back(asset_code.clone());
+        env.storage().instance().set(&DataKey::Whitelist, &whitelist);
+
+        env.events()
+            .publish((symbol_short!("wl_add"), asset_code), 1u32);
+
+        Ok(())
+    }
+
+    /// Remove an asset code from the whitelist (admin only).
+    ///
+    /// Removing an already-registered asset from the whitelist does not
+    /// affect its existing registration — it only prevents future
+    /// re-registration under that code. Emits an `ar_wl_rm` event.
+    pub fn whitelist_remove(
+        env: Env,
+        admin: Address,
+        asset_code: String,
+    ) -> Result<(), RegistryError> {
+        Self::require_admin(&env, &admin)?;
+
+        let whitelist: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut found = false;
+        let mut updated: Vec<String> = Vec::new(&env);
+        for item in whitelist.iter() {
+            if item == asset_code {
+                found = true;
+            } else {
+                updated.push_back(item);
+            }
+        }
+
+        if !found {
+            return Err(RegistryError::AssetNotWhitelisted);
+        }
+
+        env.storage().instance().set(&DataKey::Whitelist, &updated);
+
+        env.events()
+            .publish((symbol_short!("wl_rm"), asset_code), 1u32);
+
+        Ok(())
+    }
+
+    /// Check whether an asset code is on the whitelist. Public read.
+    pub fn is_whitelisted(env: Env, asset_code: String) -> bool {
+        let whitelist: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        for item in whitelist.iter() {
+            if item == asset_code {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Return the full whitelist. Public read.
+    pub fn get_whitelist(env: Env) -> Vec<String> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // =======================================================================
     // Read-only queries
     // =======================================================================
 
@@ -980,12 +1086,7 @@ impl AssetRegistryContract {
             .get(&DataKey::Versions(asset_code))
             .unwrap_or_else(|| Vec::new(&env));
 
-        for v in versions.iter() {
-            if v.version == version {
-                return Some(v);
-            }
-        }
-        None
+        versions.iter().find(|v| v.version == version)
     }
 
     // =======================================================================
@@ -1127,11 +1228,7 @@ mod tests {
     }
 
     /// Helper: register a standard USDC asset and return its code.
-    fn register_usdc(
-        env: &Env,
-        client: &AssetRegistryContractClient,
-        admin: &Address,
-    ) -> String {
+    fn register_usdc(env: &Env, client: &AssetRegistryContractClient, admin: &Address) -> String {
         let asset_code = String::from_str(env, "USDC");
         let name = String::from_str(env, "USD Coin");
         let symbol = String::from_str(env, "USDC");
@@ -1524,7 +1621,10 @@ mod tests {
 
         let records = client.get_compliance_records(&asset_code);
         assert_eq!(records.len(), 1);
-        assert_eq!(records.get(0).unwrap().jurisdiction, String::from_str(&env, "US"));
+        assert_eq!(
+            records.get(0).unwrap().jurisdiction,
+            String::from_str(&env, "US")
+        );
     }
 
     #[test]
@@ -1580,7 +1680,10 @@ mod tests {
 
         let chains = client.get_chain_links(&asset_code);
         assert_eq!(chains.len(), 1);
-        assert_eq!(chains.get(0).unwrap().chain_id, String::from_str(&env, "ethereum"));
+        assert_eq!(
+            chains.get(0).unwrap().chain_id,
+            String::from_str(&env, "ethereum")
+        );
         assert!(chains.get(0).unwrap().is_canonical);
     }
 
@@ -1772,7 +1875,10 @@ mod tests {
 
         let pools = client.get_pool_associations(&asset_code);
         assert_eq!(pools.len(), 1);
-        assert_eq!(pools.get(0).unwrap().pool_id, String::from_str(&env, "USDC_XLM"));
+        assert_eq!(
+            pools.get(0).unwrap().pool_id,
+            String::from_str(&env, "USDC_XLM")
+        );
     }
 
     #[test]
@@ -1806,7 +1912,7 @@ mod tests {
         let asset_code = register_usdc(&env, &client, &admin);
 
         // Make 3 updates
-        for i in 0..3u32 {
+        for _i in 0..3u32 {
             let name = String::from_str(&env, "USD Coin");
             client.update_metadata(
                 &admin,
@@ -2001,6 +2107,118 @@ mod tests {
     // Asset categories
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Asset whitelisting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_whitelist_add_and_check() {
+        let (env, client, admin) = setup();
+        let asset_code = String::from_str(&env, "USDC");
+
+        assert!(!client.is_whitelisted(&asset_code));
+
+        client.whitelist_add(&admin, &asset_code);
+        assert!(client.is_whitelisted(&asset_code));
+    }
+
+    #[test]
+    fn test_whitelist_add_duplicate_fails() {
+        let (env, client, admin) = setup();
+        let asset_code = String::from_str(&env, "USDC");
+
+        client.whitelist_add(&admin, &asset_code);
+        let result = client.try_whitelist_add(&admin, &asset_code);
+        assert_eq!(result, Err(Ok(RegistryError::AssetAlreadyWhitelisted)));
+    }
+
+    #[test]
+    fn test_whitelist_remove() {
+        let (env, client, admin) = setup();
+        let asset_code = String::from_str(&env, "USDC");
+
+        client.whitelist_add(&admin, &asset_code);
+        assert!(client.is_whitelisted(&asset_code));
+
+        client.whitelist_remove(&admin, &asset_code);
+        assert!(!client.is_whitelisted(&asset_code));
+    }
+
+    #[test]
+    fn test_whitelist_remove_nonexistent_fails() {
+        let (env, client, admin) = setup();
+        let asset_code = String::from_str(&env, "FAKE");
+
+        let result = client.try_whitelist_remove(&admin, &asset_code);
+        assert_eq!(result, Err(Ok(RegistryError::AssetNotWhitelisted)));
+    }
+
+    #[test]
+    fn test_get_whitelist() {
+        let (env, client, admin) = setup();
+
+        let usdc = String::from_str(&env, "USDC");
+        let eurc = String::from_str(&env, "EURC");
+
+        client.whitelist_add(&admin, &usdc);
+        client.whitelist_add(&admin, &eurc);
+
+        let list = client.get_whitelist();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_whitelist_non_admin_fails() {
+        let (env, client, _admin) = setup();
+        let stranger = Address::generate(&env);
+        let asset_code = String::from_str(&env, "USDC");
+
+        let result = client.try_whitelist_add(&stranger, &asset_code);
+        assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
+    }
+
+    #[test]
+    fn test_register_blocked_when_not_whitelisted() {
+        let (env, client, admin) = setup();
+
+        // Put something else on the whitelist so it's non-empty
+        client.whitelist_add(&admin, &String::from_str(&env, "EURC"));
+
+        // USDC is not on the whitelist
+        let result = client.try_register_asset(
+            &admin,
+            &String::from_str(&env, "USDC"),
+            &String::from_str(&env, "USD Coin"),
+            &String::from_str(&env, "USDC"),
+            &String::from_str(&env, "circle.com"),
+            &6,
+            &AssetCategory::Stablecoin,
+            &String::from_str(&env, "desc"),
+            &String::from_str(&env, "url"),
+        );
+        assert_eq!(result, Err(Ok(RegistryError::AssetNotWhitelisted)));
+    }
+
+    #[test]
+    fn test_register_allowed_when_whitelisted() {
+        let (env, client, admin) = setup();
+
+        let asset_code = String::from_str(&env, "USDC");
+        client.whitelist_add(&admin, &asset_code);
+        register_usdc(&env, &client, &admin);
+
+        assert!(client.get_asset(&asset_code).is_some());
+    }
+
+    #[test]
+    fn test_register_allowed_when_whitelist_empty() {
+        // Empty whitelist = open registry (no restriction)
+        let (env, client, admin) = setup();
+        register_usdc(&env, &client, &admin);
+
+        assert!(client.get_asset(&String::from_str(&env, "USDC")).is_some());
+    }
+
     #[test]
     fn test_all_asset_categories() {
         let (env, client, admin) = setup();
@@ -2031,11 +2249,15 @@ mod tests {
 
         assert_eq!(client.get_all_assets().len(), 6);
         assert_eq!(
-            client.get_assets_by_category(&AssetCategory::Stablecoin).len(),
+            client
+                .get_assets_by_category(&AssetCategory::Stablecoin)
+                .len(),
             1
         );
         assert_eq!(
-            client.get_assets_by_category(&AssetCategory::RealWorldAsset).len(),
+            client
+                .get_assets_by_category(&AssetCategory::RealWorldAsset)
+                .len(),
             1
         );
         assert_eq!(
