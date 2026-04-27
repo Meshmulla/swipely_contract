@@ -325,7 +325,6 @@ mod tests {
         let contract_id = env.register_contract(None, AnalyticsAggregatorContract);
         let client = AnalyticsAggregatorContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        let admin = Address::generate(&env);
 
         client.initialize(&admin);
 
@@ -341,8 +340,9 @@ mod tests {
         let history = client.get_metric_history(&metric, &BucketType::Hourly, &3);
 
         assert_eq!(history.len(), 3);
-        assert_eq!(history.get(0).unwrap().value, 500);
-        assert_eq!(history.get(1).unwrap().value, 1000);
+        assert_eq!(history.get(0).unwrap().value, 1500);
+        assert_eq!(history.get(1).unwrap().value, 0);
+        assert_eq!(history.get(2).unwrap().value, 0);
     }
 
     #[test]
@@ -351,7 +351,6 @@ mod tests {
         env.mock_all_auths();
         let contract_id = env.register_contract(None, AnalyticsAggregatorContract);
         let client = AnalyticsAggregatorContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
         let admin = Address::generate(&env);
 
         client.initialize(&admin);

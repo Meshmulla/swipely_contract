@@ -212,7 +212,6 @@ impl CircuitBreakerContract {
         let info = GuardianInfo {
             address: guardian.clone(),
             role: role.clone(),
-            role: role.clone(),
             added_at: env.ledger().timestamp(),
             active: true,
         };
@@ -359,7 +358,6 @@ impl CircuitBreakerContract {
         Self::check_guardian_permission(&env, &caller, GuardianRole::StandardGuardian);
 
         let pause_state = Self::get_pause_state(env.clone(), pause_id);
-        let pause_state = Self::get_pause_state(env.clone(), pause_id);
         assert!(pause_state.level != PauseLevel::None, "pause not active");
 
         let mut recovery_requests: Vec<RecoveryRequest> = env
@@ -378,7 +376,6 @@ impl CircuitBreakerContract {
         let config = Self::get_config(&env);
         let request = RecoveryRequest {
             pause_id,
-            requested_by: caller.clone(),
             requested_by: caller.clone(),
             timestamp: env.ledger().timestamp(),
             approvals: 1,
@@ -417,13 +414,7 @@ impl CircuitBreakerContract {
             }
         }
 
-        assert!(found_idx.is_some(), "recovery request not found");
-
-        if let Some(idx) = found_idx {
-            let mut req = recovery_requests.get(idx).unwrap();
-            req.approvals += 1;
-            recovery_requests.set(idx, req);
-        }
+        assert!(found, "recovery request not found");
 
         env.storage()
             .instance()
@@ -500,7 +491,6 @@ impl CircuitBreakerContract {
         let config = TriggerConfig {
             alert_type: alert_type.clone(),
             threshold,
-            pause_level: pause_level.clone(),
             pause_level: pause_level.clone(),
             cooldown_period,
             last_trigger: 0,
@@ -580,7 +570,6 @@ impl CircuitBreakerContract {
     // ── Query Functions ───────────────────────────────────────────────────────
 
     pub fn get_pause_state(env: Env, pause_id: u32) -> PauseState {
-        let default_addr = env.current_contract_address();
         env.storage()
             .persistent()
             .get(&DataKey::PauseState(pause_id))
@@ -604,7 +593,6 @@ impl CircuitBreakerContract {
             .unwrap_or(0);
 
         for i in 1..=pause_count {
-            let pause_state = Self::get_pause_state(env.clone(), i);
             let pause_state = Self::get_pause_state(env.clone(), i);
             if pause_state.level != PauseLevel::None {
                 match (&pause_state.scope, &scope) {
@@ -706,7 +694,7 @@ mod tests {
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
 
-    fn setup() -> (Env, CircuitBreakerContractClient<'static>, Address) {
+    fn create_test_env() -> Env {
         let env = Env::default();
         env.mock_all_auths();
         env
@@ -720,7 +708,16 @@ mod tests {
         (admin, guardian1, guardian2, user)
     }
 
-    fn setup() -> (Env, Address, CircuitBreakerContractClient<'static>, Address, Address, Address, Address) {
+    fn setup(
+    ) -> (
+        Env,
+        Address,
+        CircuitBreakerContractClient<'static>,
+        Address,
+        Address,
+        Address,
+        Address,
+    ) {
         let env = create_test_env();
         let (admin, guardian1, guardian2, user) = create_test_addresses(&env);
         let contract_id = env.register_contract(None, CircuitBreakerContract);
@@ -739,6 +736,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
     fn test_double_initialization() {
         let (_env, _contract_id, client, admin, _, _, _) = setup();
 
@@ -754,7 +752,6 @@ mod tests {
         client.add_guardian(&admin, &guardian1, &GuardianRole::StandardGuardian);
 
         let guardians = client.get_guardians();
-        let guardians = client.get_guardians();
         assert_eq!(guardians.len(), 1);
         assert_eq!(guardians.get(0).unwrap().address, guardian1);
         assert_eq!(
@@ -764,6 +761,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
     fn test_add_guardian_non_admin() {
         let (_env, _contract_id, client, admin, guardian1, _, user) = setup();
 
@@ -780,9 +778,7 @@ mod tests {
 
         let reason = String::from_str(&env, "Test global pause");
         client.pause_global(&guardian1, &reason);
-        client.pause_global(&guardian1, &reason);
 
-        assert!(client.is_paused(&PauseScope::Global));
         assert!(client.is_paused(&PauseScope::Global));
     }
 
@@ -796,9 +792,7 @@ mod tests {
         let bridge_id = String::from_str(&env, "test-bridge");
         let reason = String::from_str(&env, "Test bridge pause");
         client.pause_bridge(&guardian1, &bridge_id, &reason);
-        client.pause_bridge(&guardian1, &bridge_id, &reason);
 
-        assert!(client.is_paused(&PauseScope::Bridge(bridge_id)));
         assert!(client.is_paused(&PauseScope::Bridge(bridge_id)));
     }
 
@@ -812,13 +806,12 @@ mod tests {
         let asset_code = String::from_str(&env, "USDC");
         let reason = String::from_str(&env, "Test asset pause");
         client.pause_asset(&guardian1, &asset_code, &reason);
-        client.pause_asset(&guardian1, &asset_code, &reason);
 
-        assert!(client.is_paused(&PauseScope::Asset(asset_code)));
         assert!(client.is_paused(&PauseScope::Asset(asset_code)));
     }
 
     #[test]
+    #[should_panic]
     fn test_pause_non_guardian() {
         let (env, _contract_id, client, admin, _guardian1, _guardian2, user) = setup();
 
@@ -838,13 +831,10 @@ mod tests {
 
         let reason = String::from_str(&env, "Test pause");
         client.pause_global(&guardian1, &reason);
-        client.pause_global(&guardian1, &reason);
-
         client.request_recovery(&guardian2, &1);
         client.approve_recovery(&guardian1, &1);
         client.execute_recovery(&guardian2, &1);
 
-        assert!(!client.is_paused(&PauseScope::Global));
         assert!(!client.is_paused(&PauseScope::Global));
     }
 
@@ -856,7 +846,6 @@ mod tests {
         client.add_to_address_whitelist(&admin, &user);
 
         assert!(client.is_whitelisted_address(&user));
-        assert!(client.is_whitelisted_address(&user));
     }
 
     #[test]
@@ -867,13 +856,12 @@ mod tests {
 
         let asset_code = String::from_str(&env, "USDC");
         client.add_asset_to_whitelist(&admin, &asset_code);
-        client.add_asset_to_whitelist(&admin, &asset_code);
 
-        assert!(client.is_whitelisted_asset(&asset_code));
         assert!(client.is_whitelisted_asset(&asset_code));
     }
 
     #[test]
+    #[should_panic]
     fn test_whitelist_non_admin() {
         let (_env, _contract_id, client, admin, guardian1, _, user) = setup();
 

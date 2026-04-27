@@ -357,6 +357,95 @@ pub struct RoleAssignment {
 }
 
 
+#[contracttype]
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+
+pub enum StatusTier {
+
+    Ok,
+
+    Low,
+
+    Medium,
+
+    High,
+
+}
+
+
+#[contracttype]
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+
+pub struct AssetStatusRollup {
+
+    pub asset_code: String,
+
+    pub tier: StatusTier,
+
+    pub health_score: u32,
+
+    pub has_price_deviation_alert: bool,
+
+    pub price_deviation_tier: StatusTier,
+
+    pub paused: bool,
+
+    pub active: bool,
+
+    pub timestamp: u64,
+
+}
+
+
+#[contracttype]
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+
+pub struct BridgeStatusRollup {
+
+    pub bridge_id: String,
+
+    pub tier: StatusTier,
+
+    pub latest_mismatch_bps: i128,
+
+    pub is_critical: bool,
+
+    pub timestamp: u64,
+
+}
+
+
+#[contracttype]
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+
+pub struct ContractStatusRollup {
+
+    pub tier: StatusTier,
+
+    pub asset_ok: u32,
+
+    pub asset_low: u32,
+
+    pub asset_medium: u32,
+
+    pub asset_high: u32,
+
+    pub bridge_ok: u32,
+
+    pub bridge_low: u32,
+
+    pub bridge_medium: u32,
+
+    pub bridge_high: u32,
+
+    pub timestamp: u64,
+
+}
+
 
 // ---------------------------------------------------------------------------
 // Emergency Pause types (issue #96)
@@ -370,6 +459,8 @@ pub struct RoleAssignment {
 pub enum DataKey {
 
     Admin,
+    HealthWeights,
+    HealthScoreResult(String),
     AssetHealth(String),
     PriceRecord(String),
     MonitoredAssets,
@@ -395,6 +486,15 @@ pub enum DataKey {
     LiquidityPairs,
     /// Historical price records for an asset (Vec<PriceRecord>).
     PriceHistory(String),
+
+    /// Latest rollup status for an asset.
+    AssetStatusRollup(String),
+
+    /// Latest rollup status for a bridge.
+    BridgeStatusRollup(String),
+
+    /// Latest rollup status for the whole contract.
+    ContractStatusRollup,
 }
 
 #[contract]
