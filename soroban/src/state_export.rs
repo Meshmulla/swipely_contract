@@ -83,14 +83,17 @@ impl StateExportHelper {
         StateExportHelper { env }
     }
 
+    /// Generate deterministic state hash for audit trail.
     pub fn compute_state_hash(
         env: Env,
         asset_code: &String,
-        _status: &String,
-        _risk_score: u32,
-        _timestamp: u64,
+        status: &String,
+        risk_score: u32,
+        timestamp: u64,
     ) -> String {
-        asset_code.clone()
+        let mut hash_input = String::from_str(&env, "");
+        hash_input = String::from_str(&env, &format!("{}{}{}{}", asset_code, status, risk_score, timestamp));
+        hash_input
     }
 
     /// Create a state export snapshot.

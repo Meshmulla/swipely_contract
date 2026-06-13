@@ -19,31 +19,14 @@ pub mod source_trust;
 pub mod rate_limiter;
 pub mod migration;
 pub mod state_export;
-pub mod submission_pause;
-pub mod event_query;
-pub mod bridge_asset_metadata;
 
 #[cfg(test)]
 pub mod asset_registry;
 pub mod analytics_aggregator;
 #[cfg(test)]
 pub mod circuit_breaker;
-pub mod acl;
-#[cfg(test)]
-pub mod alert_system;
-#[cfg(test)]
-pub mod bridge_reserve_verifier;
-#[cfg(test)]
-pub mod escrow_contract;
-#[cfg(test)]
-pub mod fee_distribution;
 
-pub mod source_priority;
-pub mod rollup_flush;
-pub mod submission_replay;
-pub mod asset_ranking;
-
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec, Bytes, BytesN};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
 use liquidity_pool::{
 
@@ -52,222 +35,6 @@ use liquidity_pool::{
     PoolSnapshot, PoolType,
 
 };
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RetentionDataType {
-    SupplyMismatches,
-    LiquidityHistory,
-    Checkpoints,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RetentionPolicy {
-    pub data_type: RetentionDataType,
-    pub retention_secs: u64,
-    pub trigger_interval_secs: u64,
-    pub max_deletions_per_run: u32,
-    pub archive_before_delete: bool,
-    pub enabled: bool,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CleanupDataTypeResult {
-    pub data_type: RetentionDataType,
-    pub deleted: u32,
-    pub archived: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CleanupResult {
-    pub executed_at: u64,
-    pub total_deleted: u32,
-    pub total_archived: u32,
-    pub details: Vec<CleanupDataTypeResult>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StorageUsageEntry {
-    pub data_type: RetentionDataType,
-    pub tracked_keys: u32,
-    pub active_records: u32,
-    pub archived_records: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StorageStats {
-    pub generated_at: u64,
-    pub total_tracked_keys: u32,
-    pub total_active_records: u32,
-    pub total_archived_records: u32,
-    pub entries: Vec<StorageUsageEntry>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConfigCategory {
-    Thresholds,
-    Timeouts,
-    Limits,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CheckpointTrigger {
-    Automatic,
-    Manual,
-    Restore,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointConfig {
-    pub interval_secs: u64,
-    pub max_checkpoints: u32,
-    pub format_version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointAssetState {
-    pub asset_code: String,
-    pub health: AssetHealth,
-    pub latest_price: Option<PriceRecord>,
-    pub health_result: Option<HealthScoreResult>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointSnapshot {
-    pub checkpoint_id: u64,
-    pub format_version: u32,
-    pub created_at: u64,
-    pub trigger: CheckpointTrigger,
-    pub created_by: Address,
-    pub label: String,
-    pub monitored_assets: Vec<String>,
-    pub health_weights: HealthWeights,
-    pub assets: Vec<CheckpointAssetState>,
-    pub restored_from: Option<u64>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointMetadata {
-    pub checkpoint_id: u64,
-    pub format_version: u32,
-    pub created_at: u64,
-    pub trigger: CheckpointTrigger,
-    pub created_by: Address,
-    pub label: String,
-    pub monitored_asset_count: u32,
-    pub asset_count: u32,
-    pub state_hash: BytesN<32>,
-    pub restored_from: Option<u64>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointAssetDiff {
-    pub asset_code: String,
-    pub health_changed: bool,
-    pub price_changed: bool,
-    pub health_result_changed: bool,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointComparison {
-    pub from_checkpoint_id: u64,
-    pub to_checkpoint_id: u64,
-    pub timestamp_delta: u64,
-    pub state_hash_changed: bool,
-    pub weights_changed: bool,
-    pub added_assets: Vec<String>,
-    pub removed_assets: Vec<String>,
-    pub changed_assets: Vec<CheckpointAssetDiff>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointValidation {
-    pub checkpoint_id: u64,
-    pub is_valid: bool,
-    pub message: String,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RiskScoreConfig {
-    pub health_weight_bps: u32,
-    pub price_weight_bps: u32,
-    pub volatility_weight_bps: u32,
-    pub max_price_deviation_bps: u32,
-    pub max_volatility_bps: u32,
-    pub version: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RiskScoreResult {
-    pub risk_score_bps: u32,
-    pub normalized_health_risk_bps: u32,
-    pub normalized_price_risk_bps: u32,
-    pub normalized_volatility_risk_bps: u32,
-    pub health_score: u32,
-    pub price_deviation_bps: u32,
-    pub volatility_bps: u32,
-    pub config: RiskScoreConfig,
-    pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Statistics {
-    pub asset_code: String,
-    pub period: StatPeriod,
-    pub average_price: i128,
-    pub stddev_price: i128,
-    pub volatility_bps: i128,
-    pub min_price: i128,
-    pub max_price: i128,
-    pub median_price: i128,
-    pub p25_price: i128,
-    pub p75_price: i128,
-    pub data_points: u32,
-    pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalculationInput {
-    pub values: Vec<i128>,
-    pub volumes: Option<Vec<i128>>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveryStep {
-    pub description: String,
-    pub completed: bool,
-    pub recorded_at: u64,
-    pub actor: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveryState {
-    pub active: bool,
-    pub reason: String,
-    pub entered_at: u64,
-    pub entered_by: Address,
-    pub step_count: u32,
-}
 // Storage key constants instead of using DataKey enum for storage operations
 mod keys {
     pub const ADMIN: &str = "admin";
@@ -773,166 +540,6 @@ pub struct ContractStatusRollup {
 /// Emitted and stored whenever the global pause state changes so that
 /// operators can trace the full history of emergency actions.
 #[contracttype]
-#[derive(Clone, Copy)]
-pub enum ExpirationKind {
-    Asset,
-    Price,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AssetDataKey {
-    Health(String),
-    Price(String),
-    PriceHist(String),
-    Stats(String),
-    ExpTtl(String),
-    HealthRes(String),
-    DevAlert(String),
-    DevThresh(String),
-    LiqDepth(String),
-    LiqHist(String),
-    ArchLiqHist(String),
-    PauseReason(String),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BridgeDataKey {
-    Mismatches(String),
-    ArchMismatches(String),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConfigDataKey {
-    Signer(String),
-    SignerNonce(String),
-    SigCache(soroban_sdk::BytesN<32>),
-    RoleKey(Address),
-    ChkpntSnap(u64),
-    ArchChkpntSnap(u64),
-    RetPolicy(RetentionDataType),
-    LastCleanup(RetentionDataType),
-    Entry(ConfigCategory, String),
-    RetOvr(String, RetentionDataType),
-    AuditLog(ConfigCategory, String),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StatPeriod {
-    Hour,
-    Day,
-    Week,
-    Month,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CheckpointTrigger {
-    Automatic,
-    Manual,
-    Restore,
-}
-
-/// Categories of admin actions captured by the activity log.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AdminActivityAction {
-    HealthSubmitted,
-    PriceSubmitted,
-    AssetRegistered,
-    RoleGranted,
-    RoleRevoked,
-    ContractPaused,
-    ContractUnpaused,
-    ConfigUpdated,
-    RecoveryEntered,
-    RecoveryExited,
-}
-
-/// A single entry in the on-chain admin activity log.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdminActivityEntry {
-    /// Monotonically-increasing sequence number (starts at 1).
-    pub sequence: u32,
-    /// Category of action taken.
-    pub action: AdminActivityAction,
-    /// Address that performed the action.
-    pub actor: Address,
-    /// Human-readable context (asset code, role name, reason, etc.).
-    pub detail: String,
-    /// Ledger timestamp when the action was recorded.
-    pub timestamp: u64,
-}
-
-/// Paginated result returned by `get_admin_activity`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdminActivityPage {
-    /// Entries for the requested page.
-    pub entries: Vec<AdminActivityEntry>,
-    /// Total entries in the log (not just this page).
-    pub total: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HealthSource {
-    /// Unique identifier for this source (e.g., "oracle-1", "bridge-node-a").
-    pub source_id: String,
-    /// Relative weight in basis points (10 000 = 100 %). Used in aggregation.
-    pub weight_bps: u32,
-    /// Whether this source is currently trusted to submit data.
-    pub trusted: bool,
-    /// Ledger timestamp when the source was registered.
-    pub registered_at: u64,
-}
-
-/// A per-source health data point stored for a specific asset.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourcedHealthEntry {
-    /// Source that submitted this entry.
-    pub source_id: String,
-    /// Asset this entry applies to.
-    pub asset_code: String,
-    pub health_score: u32,
-    pub liquidity_score: u32,
-    pub price_stability_score: u32,
-    pub bridge_uptime_score: u32,
-    /// Ledger timestamp of submission.
-    pub submitted_at: u64,
-}
-
-/// Weighted aggregation of all trusted source submissions for one asset.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AggregatedHealth {
-    pub asset_code: String,
-    /// Weighted-average health score across all contributing sources.
-    pub weighted_health_score: u32,
-    /// Weighted-average liquidity score.
-    pub weighted_liquidity_score: u32,
-    /// Weighted-average price stability score.
-    pub weighted_price_stability_score: u32,
-    /// Weighted-average bridge uptime score.
-    pub weighted_bridge_uptime_score: u32,
-    /// Number of trusted sources that contributed.
-    pub source_count: u32,
-    /// Ledger timestamp when this aggregation was computed.
-    pub computed_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum HealthSourceDataKey {
-    /// Sourced entry for (source_id, asset_code).
-    Entry(String, String),
-}
-
 pub enum DataKey {
 
     Admin,
@@ -1087,7 +694,6 @@ impl BridgeWatchContract {
         bridge_uptime_score: u32,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
         
         // Check if caller is a trusted source (if any sources are registered)
@@ -1148,7 +754,6 @@ impl BridgeWatchContract {
     /// the same ledger timestamp. A `health_up` event is emitted per asset.
 
     pub fn submit_health_batch(env: Env, caller: Address, records: Vec<HealthScoreBatch>) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
 
@@ -1243,7 +848,6 @@ impl BridgeWatchContract {
         source: String,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
         
         // Check if caller is a trusted source (if any sources are registered)
@@ -1796,7 +1400,6 @@ impl BridgeWatchContract {
         source_chain_supply: i128,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
@@ -2034,7 +1637,6 @@ impl BridgeWatchContract {
         sources: Vec<String>,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
@@ -2620,10 +2222,6 @@ impl BridgeWatchContract {
 
     }
 
-    fn assert_not_globally_paused(env: &Env) {
-        submission_pause::assert_not_paused(env);
-    }
-
 
     fn tier_rank(tier: &StatusTier) -> u32 {
 
@@ -3055,7 +2653,6 @@ impl BridgeWatchContract {
         pool_type: PoolType,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
@@ -3458,7 +3055,6 @@ impl BridgeWatchContract {
         manual_override: Option<u32>,
 
     ) {
-        Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
 
         let status = Self::load_asset_health(&env, &asset_code);
@@ -3671,6 +3267,7 @@ impl BridgeWatchContract {
         (weighted_sum / 100) as u32
 
     }
+}
 
 
 
@@ -4166,44 +3763,6 @@ impl BridgeWatchContract {
         false
     }
 
-    fn append_u32(buf: &mut Bytes, value: u32) {
-        let bytes = value.to_be_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            buf.push_back(bytes[i]);
-            i += 1;
-        }
-    }
-
-    fn append_u64(buf: &mut Bytes, value: u64) {
-        let bytes = value.to_be_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            buf.push_back(bytes[i]);
-            i += 1;
-        }
-    }
-
-    fn append_bytesn<const N: usize>(buf: &mut Bytes, value: &BytesN<N>) {
-        let bytes = value.to_array();
-        let mut i = 0;
-        while i < bytes.len() {
-            buf.push_back(bytes[i]);
-            i += 1;
-        }
-    }
-
-    fn default_risk_score_config() -> RiskScoreConfig {
-        RiskScoreConfig {
-            health_weight_bps: 5_000,
-            price_weight_bps: 2_500,
-            volatility_weight_bps: 2_500,
-            max_price_deviation_bps: 2_000,
-            max_volatility_bps: 5_000,
-            version: 1,
-        }
-    }
-
     fn append_i128(buf: &mut Bytes, value: i128) {
         let bytes = value.to_be_bytes();
         let mut i = 0;
@@ -4324,11 +3883,41 @@ impl BridgeWatchContract {
         Self::append_u64(buf, value.timestamp);
     }
 
+    /// Load stored health weights or return defaults (30 / 40 / 30, v1).
+    fn load_health_weights(env: &Env) -> HealthWeights {
+        env.storage()
+            .instance()
+            .get(&keys::HEALTH_WEIGHTS)
+            .unwrap_or(HealthWeights {
+                liquidity_weight: 30,
+                price_stability_weight: 40,
+                bridge_uptime_weight: 30,
+                version: 1,
+            })
+    }
+
     fn load_risk_score_config(env: &Env) -> RiskScoreConfig {
         env.storage()
             .instance()
             .get(&keys::RISK_SCORE_CONFIG)
             .unwrap_or_else(Self::default_risk_score_config)
+    }
+
+    /// Validate that three weights are each ≤ 100 and sum to exactly 100.
+    fn validate_weights(liq: u32, stab: u32, up: u32) {
+        if liq > 100 || stab > 100 || up > 100 {
+            panic!("each weight must be between 0 and 100");
+        }
+        if liq + stab + up != 100 {
+            panic!("weights must sum to 100");
+        }
+    }
+
+    /// Validate that a single score is within the 0–100 range.
+    fn validate_score_range(score: u32, name: &str) {
+        if score > 100 {
+            panic!("{} must be between 0 and 100", name);
+        }
     }
 
     fn validate_risk_score_config(
@@ -4357,6 +3946,21 @@ impl BridgeWatchContract {
         if version == 0 {
             panic!("risk score config version must be greater than 0");
         }
+    }
+
+    /// Compute the weighted-average composite score.
+    ///
+    /// `composite = (liq * liq_w + stab * stab_w + up * up_w) / 100`
+    fn compute_composite(
+        liquidity_score: u32,
+        price_stability_score: u32,
+        bridge_uptime_score: u32,
+        weights: &HealthWeights,
+    ) -> u32 {
+        let weighted_sum = (liquidity_score as u64) * (weights.liquidity_weight as u64)
+            + (price_stability_score as u64) * (weights.price_stability_weight as u64)
+            + (bridge_uptime_score as u64) * (weights.bridge_uptime_weight as u64);
+        (weighted_sum / 100) as u32
     }
 
     fn build_risk_score_result(
@@ -5570,28 +5174,60 @@ impl BridgeWatchContract {
     // -----------------------------------------------------------------------
 
     /// Return the current event payload schema version.
+    ///
+    /// Off-chain consumers should call this after connecting to detect whether
+    /// a schema migration has occurred and rebuild their replay state if needed.
     pub fn get_replay_schema_version(_env: Env) -> u32 {
-        event_query::EVENT_SCHEMA_VERSION
+        EVENT_SCHEMA_VERSION
     }
 
     /// Query replay-friendly event history ordered by ascending `ordering_key`.
-    pub fn get_replay_events(env: Env, from_ordering_key: u64, limit: u32) -> event_query::EventReplayPage {
-        event_query::get_replay_page(env, from_ordering_key, limit)
+    ///
+    /// Returns up to `limit` entries whose `ordering_key` is ≥
+    /// `from_ordering_key`. Pass `0` to start from the beginning of the log.
+    /// Maximum `limit` per call is 100. The returned `EventReplayPage` includes
+    /// the total log size so callers can implement cursor-based pagination.
+    pub fn get_replay_events(env: Env, from_ordering_key: u64, limit: u32) -> EventReplayPage {
+        if limit > 100 {
+            panic!("limit must not exceed 100");
+        }
+        let log: Vec<EventReplayEntry> = env
+            .storage()
+            .persistent()
+            .get(&keys::EVENT_REPLAY_LOG)
+            .unwrap_or_else(|| Vec::new(&env));
+        let total = log.len();
+        let mut page: Vec<EventReplayEntry> = Vec::new(&env);
+        for i in 0..total {
+            if page.len() >= limit {
+                break;
+            }
+            let entry = log.get(i).unwrap();
+            if entry.ordering_key >= from_ordering_key {
+                page.push_back(entry);
+            }
+        }
+        EventReplayPage {
+            entries: page,
+            total,
+            schema_version: EVENT_SCHEMA_VERSION,
+        }
     }
 
     /// Return the total number of entries in the event replay log.
     pub fn get_replay_log_size(env: Env) -> u32 {
-        event_query::log_size(&env)
+        env.storage()
+            .persistent()
+            .get::<_, Vec<EventReplayEntry>>(&keys::EVENT_REPLAY_LOG)
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 
-    /// Query recent contract events with optional type and asset filters.
-    pub fn query_contract_events(
-        env: Env,
-        filter: event_query::ContractEventFilter,
-    ) -> event_query::ContractEventQueryResult {
-        event_query::query_events(env, filter)
-    }
-
+    /// Internal: append one entry to the event replay log.
+    ///
+    /// The `ordering_key` is `(timestamp << 32) | (sequence & 0xFFFF_FFFF)`
+    /// providing stable, deterministic ordering even for same-timestamp events.
+    /// Log is capped at 1 000 entries; oldest entries are trimmed on overflow.
     fn append_replay_event(
         env: &Env,
         event_type: String,
@@ -5599,79 +5235,41 @@ impl BridgeWatchContract {
         subject: String,
         value: i128,
     ) {
-        event_query::append_event(env, event_type, actor, subject, value);
-    }
-
-    // -----------------------------------------------------------------------
-    // Pausable data submission (issue #450)
-    // -----------------------------------------------------------------------
-
-    /// Pause all mutating data submissions while keeping reads available.
-    pub fn pause_submissions(env: Env, caller: Address, reason: String) {
-        submission_pause::pause(env, caller, reason);
-    }
-
-    /// Resume data submissions after a global pause.
-    pub fn resume_submissions(env: Env, caller: Address) {
-        submission_pause::resume(env, caller);
-    }
-
-    /// Returns whether contract-wide data submissions are paused.
-    pub fn is_submissions_paused(env: Env) -> bool {
-        submission_pause::is_paused(&env)
-    }
-
-    /// Read the current submission pause state.
-    pub fn get_submission_pause_state(env: Env) -> submission_pause::SubmissionPauseState {
-        submission_pause::get_state(&env)
-    }
-
-    /// Return pause/unpause audit history.
-    pub fn get_submission_pause_history(env: Env) -> soroban_sdk::Vec<submission_pause::PauseHistoryEntry> {
-        submission_pause::get_history(env)
-    }
-
-    // -----------------------------------------------------------------------
-    // Asset metadata updates (issue #451)
-    // -----------------------------------------------------------------------
-
-    /// Update monitored asset metadata without recreating the asset entry.
-    pub fn update_asset_metadata(
-        env: Env,
-        caller: Address,
-        asset_code: String,
-        name: String,
-        symbol: String,
-        description: String,
-        url: String,
-        change_reason: String,
-    ) -> bridge_asset_metadata::BridgeAssetMetadata {
-        bridge_asset_metadata::update_metadata(
-            env,
-            caller,
-            asset_code,
-            name,
-            symbol,
-            description,
-            url,
-            change_reason,
-        )
-    }
-
-    /// Read asset metadata document.
-    pub fn get_asset_metadata(
-        env: Env,
-        asset_code: String,
-    ) -> Option<bridge_asset_metadata::BridgeAssetMetadata> {
-        bridge_asset_metadata::get_metadata(env, asset_code)
-    }
-
-    /// Read asset metadata change history.
-    pub fn get_asset_metadata_history(
-        env: Env,
-        asset_code: String,
-    ) -> soroban_sdk::Vec<bridge_asset_metadata::MetadataChangeRecord> {
-        bridge_asset_metadata::get_metadata_history(env, asset_code)
+        let seq: u32 = env
+            .storage()
+            .instance()
+            .get(&keys::EVENT_REPLAY_CTR)
+            .unwrap_or(0u32)
+            + 1;
+        env.storage().instance().set(&keys::EVENT_REPLAY_CTR, &seq);
+        let now = env.ledger().timestamp();
+        let ordering_key = (now << 32) | (seq as u64);
+        let entry = EventReplayEntry {
+            event_id: seq,
+            event_type,
+            actor,
+            subject,
+            value,
+            timestamp: now,
+            ordering_key,
+            schema_version: EVENT_SCHEMA_VERSION,
+        };
+        let mut log: Vec<EventReplayEntry> = env
+            .storage()
+            .persistent()
+            .get(&keys::EVENT_REPLAY_LOG)
+            .unwrap_or_else(|| Vec::new(env));
+        log.push_back(entry);
+        if log.len() > 1000 {
+            let mut trimmed: Vec<EventReplayEntry> = Vec::new(env);
+            for i in 1..log.len() {
+                trimmed.push_back(log.get(i).unwrap());
+            }
+            log = trimmed;
+        }
+        env.storage()
+            .persistent()
+            .set(&keys::EVENT_REPLAY_LOG, &log);
     }
 
     // ── Trusted Source Registry ───────────────────────────────────────────────
@@ -6075,7 +5673,6 @@ mod tests {
 
         env.ledger().set_timestamp(200);
         client.record_supply_mismatch(&bridge, &asset, &1_000_000, &1_002_000);
-    }
 
     use super::*;
 
