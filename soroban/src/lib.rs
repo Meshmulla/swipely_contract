@@ -18,16 +18,12 @@ pub mod liquidity_pool;
 pub mod migration;
 #[cfg(test)]
 pub mod multisig_treasury;
-pub mod operator_rotation;
 #[cfg(test)]
 pub mod rate_limiter;
-pub mod report_hash;
 #[cfg(test)]
 pub mod reputation_system;
-pub mod source_blessing;
 pub mod source_trust;
 pub mod state_export;
-pub mod threshold_window;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Vec,
 };
@@ -1278,13 +1274,13 @@ impl BridgeWatchContract {
         bridge_uptime_score: u32,
     ) {
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
-
+        
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
         // Check if caller is a trusted source (if any sources are registered)
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if active_sources.len() > 0 {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }
@@ -1402,13 +1398,13 @@ impl BridgeWatchContract {
         source: String,
     ) {
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
-
+        
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
         // Check if caller is a trusted source (if any sources are registered)
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if active_sources.len() > 0 {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }
@@ -1913,7 +1909,7 @@ impl BridgeWatchContract {
     pub fn lock_asset(env: Env, caller: Address, asset_code: String, reason: String) {
         Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
-
+        
         let status = Self::load_asset_health(&env, &asset_code);
         if !status.active {
             panic!("cannot lock a deregistered asset");
@@ -1923,7 +1919,7 @@ impl BridgeWatchContract {
             .storage()
             .persistent()
             .get(&AssetDataKey::Lock(asset_code.clone()));
-
+        
         if let Some(lock) = existing_lock {
             if lock.is_locked {
                 panic!("asset is already locked");
@@ -1950,14 +1946,14 @@ impl BridgeWatchContract {
             .persistent()
             .get(&AssetDataKey::LockHist(asset_code.clone()))
             .unwrap_or_else(|| Vec::new(&env));
-
+        
         history.push_back(AssetLockRecord {
             locked: true,
             reason: reason.clone(),
             caller: caller.clone(),
             timestamp,
         });
-
+        
         env.storage()
             .persistent()
             .set(&AssetDataKey::LockHist(asset_code.clone()), &history);
@@ -1973,7 +1969,7 @@ impl BridgeWatchContract {
     pub fn unlock_asset(env: Env, caller: Address, asset_code: String) {
         Self::assert_not_globally_paused(&env);
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
-
+        
         let status = Self::load_asset_health(&env, &asset_code);
         if !status.active {
             panic!("cannot unlock a deregistered asset");
@@ -1983,7 +1979,7 @@ impl BridgeWatchContract {
             .storage()
             .persistent()
             .get(&AssetDataKey::Lock(asset_code.clone()));
-
+        
         let existing_lock = existing_lock.unwrap_or_else(|| {
             panic!("asset is not locked");
         });
@@ -2012,14 +2008,14 @@ impl BridgeWatchContract {
             .persistent()
             .get(&AssetDataKey::LockHist(asset_code.clone()))
             .unwrap_or_else(|| Vec::new(&env));
-
+        
         history.push_back(AssetLockRecord {
             locked: false,
             reason: String::from_str(&env, "Unlocked"),
             caller: caller.clone(),
             timestamp,
         });
-
+        
         env.storage()
             .persistent()
             .set(&AssetDataKey::LockHist(asset_code.clone()), &history);
@@ -2043,7 +2039,7 @@ impl BridgeWatchContract {
             .storage()
             .persistent()
             .get(&AssetDataKey::Lock(asset_code));
-
+        
         match lock_state {
             Some(state) => state.is_locked,
             None => false,
@@ -2062,7 +2058,7 @@ impl BridgeWatchContract {
             .storage()
             .persistent()
             .get(&AssetDataKey::Lock(asset_code.clone()));
-
+        
         if let Some(state) = lock_state {
             if state.is_locked {
                 panic!("asset is locked for maintenance");
@@ -3170,12 +3166,13 @@ impl BridgeWatchContract {
                     trimmed_history_records += 1;
                 }
             }
-            if filtered_history.is_empty() && !history.is_empty() && policy.preserve_latest_history
-            {
+            if filtered_history.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
                 let last_index = history.len() - 1;
                 if let Some(last_entry) = history.get(last_index) {
                     filtered_history.push_back(last_entry);
-                    trimmed_history_records = trimmed_history_records.saturating_sub(1);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
                 }
             }
             env.storage().persistent().set(
@@ -3203,11 +3200,13 @@ impl BridgeWatchContract {
                     trimmed_history_records += 1;
                 }
             }
-            if filtered.is_empty() && !history.is_empty() && policy.preserve_latest_history {
+            if filtered.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
                 let last_index = history.len() - 1;
                 if let Some(last_entry) = history.get(last_index) {
                     filtered.push_back(last_entry);
-                    trimmed_history_records = trimmed_history_records.saturating_sub(1);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
                 }
             }
             env.storage()
@@ -3247,11 +3246,13 @@ impl BridgeWatchContract {
                     trimmed_history_records += 1;
                 }
             }
-            if filtered.is_empty() && !history.is_empty() && policy.preserve_latest_history {
+            if filtered.len() == 0 && history.len() > 0 && policy.preserve_latest_history {
                 let last_index = history.len() - 1;
                 if let Some(last_entry) = history.get(last_index) {
                     filtered.push_back(last_entry);
-                    trimmed_history_records = trimmed_history_records.saturating_sub(1);
+                    if trimmed_history_records > 0 {
+                        trimmed_history_records -= 1;
+                    }
                 }
             }
             env.storage()
@@ -4454,7 +4455,7 @@ impl BridgeWatchContract {
         }
 
         // Validate name (non-empty, ≤ 64 bytes)
-        if name.is_empty() {
+        if name.len() == 0 {
             panic!("config: name must not be empty");
         }
         if name.len() > 64 {
@@ -4462,7 +4463,7 @@ impl BridgeWatchContract {
         }
 
         // Validate description (non-empty, ≤ 256 bytes)
-        if description.is_empty() {
+        if description.len() == 0 {
             panic!("config: description must not be empty");
         }
         if description.len() > 256 {
@@ -4657,7 +4658,7 @@ impl BridgeWatchContract {
             }
         }
 
-        if updates.is_empty() {
+        if updates.len() == 0 {
             panic!("config: bulk update list must not be empty");
         }
         if updates.len() > 20 {
@@ -7540,7 +7541,7 @@ impl BridgeWatchContract {
 
     /// Calculate min and max values in a series.
     pub fn calculate_min_max(_env: Env, values: Vec<i128>) -> (i128, i128) {
-        if values.is_empty() {
+        if values.len() == 0 {
             return (0, 0);
         }
 
@@ -7935,9 +7936,9 @@ impl BridgeWatchContract {
         }
 
         // Normalize
-        cov /= n;
-        var_x /= n;
-        var_y /= n;
+        cov = cov / n;
+        var_x = var_x / n;
+        var_y = var_y / n;
 
         // Calculate correlation
         let std_x = Self::integer_sqrt(var_x);
