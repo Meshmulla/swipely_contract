@@ -9,6 +9,10 @@ pub mod analytics_aggregator;
 #[cfg(test)]
 pub mod asset_registry;
 #[cfg(test)]
+pub mod asset_deprecation;
+#[cfg(test)]
+pub mod batch_query;
+#[cfg(test)]
 pub mod circuit_breaker;
 #[cfg(test)]
 pub mod governance;
@@ -24,6 +28,8 @@ pub mod rate_limiter;
 pub mod report_hash;
 #[cfg(test)]
 pub mod reputation_system;
+#[cfg(test)]
+pub mod sidecar_state;
 pub mod source_blessing;
 pub mod source_trust;
 pub mod state_export;
