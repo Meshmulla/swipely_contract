@@ -305,9 +305,9 @@ mod tests {
     #[test]
     fn test_unbless_source() {
         let (env, admin, contract_id) = setup();
-        env.as_contract(&contract_id, || {
-            let source = Address::generate(&env);
+        let source = Address::generate(&env);
 
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -315,6 +315,8 @@ mod tests {
                 String::from_str(&env, "USDC"),
                 String::from_str(&env, "CoinGecko"),
             );
+        });
+        env.as_contract(&contract_id, || {
             assert!(is_source_blessed(
                 &env,
                 &source,
@@ -322,6 +324,8 @@ mod tests {
             ));
 
             unbless_source(&env, &admin, &source, String::from_str(&env, "USDC"));
+        });
+        env.as_contract(&contract_id, || {
             assert!(!is_source_blessed(
                 &env,
                 &source,
@@ -360,10 +364,10 @@ mod tests {
     #[test]
     fn test_get_blessed_sources_for_asset() {
         let (env, admin, contract_id) = setup();
-        env.as_contract(&contract_id, || {
-            let source1 = Address::generate(&env);
-            let source2 = Address::generate(&env);
+        let source1 = Address::generate(&env);
+        let source2 = Address::generate(&env);
 
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -371,6 +375,8 @@ mod tests {
                 String::from_str(&env, "USDC"),
                 String::from_str(&env, "Oracle 1"),
             );
+        });
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -378,7 +384,8 @@ mod tests {
                 String::from_str(&env, "USDC"),
                 String::from_str(&env, "Oracle 2"),
             );
-
+        });
+        env.as_contract(&contract_id, || {
             let blessed = get_blessed_sources_for_asset(&env, &String::from_str(&env, "USDC"));
             assert_eq!(blessed.len(), 2);
         });
@@ -387,10 +394,10 @@ mod tests {
     #[test]
     fn test_get_all_blessings() {
         let (env, admin, contract_id) = setup();
-        env.as_contract(&contract_id, || {
-            let source1 = Address::generate(&env);
-            let source2 = Address::generate(&env);
+        let source1 = Address::generate(&env);
+        let source2 = Address::generate(&env);
 
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -398,6 +405,8 @@ mod tests {
                 String::from_str(&env, "USDC"),
                 String::from_str(&env, "Oracle 1"),
             );
+        });
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -405,7 +414,8 @@ mod tests {
                 String::from_str(&env, "EURC"),
                 String::from_str(&env, "Oracle 2"),
             );
-
+        });
+        env.as_contract(&contract_id, || {
             let all = get_all_blessings(&env);
             assert_eq!(all.len(), 2);
         });
@@ -414,9 +424,9 @@ mod tests {
     #[test]
     fn test_unblessed_source_not_preferred() {
         let (env, admin, contract_id) = setup();
-        env.as_contract(&contract_id, || {
-            let source = Address::generate(&env);
+        let source = Address::generate(&env);
 
+        env.as_contract(&contract_id, || {
             bless_source(
                 &env,
                 &admin,
@@ -424,8 +434,11 @@ mod tests {
                 String::from_str(&env, "USDC"),
                 String::from_str(&env, "Oracle"),
             );
+        });
+        env.as_contract(&contract_id, || {
             unbless_source(&env, &admin, &source, String::from_str(&env, "USDC"));
-
+        });
+        env.as_contract(&contract_id, || {
             let preferred = get_preferred_source_for_asset(&env, &String::from_str(&env, "USDC"));
             assert!(preferred.is_none());
         });

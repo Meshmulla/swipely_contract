@@ -312,6 +312,8 @@ mod tests {
                 WindowUnit::Hours,
                 500,
             );
+        });
+        env.as_contract(&contract_id, || {
             update_window(
                 &env,
                 &admin,
@@ -320,6 +322,8 @@ mod tests {
                 WindowUnit::Hours,
                 300,
             );
+        });
+        env.as_contract(&contract_id, || {
             let window = get_window(&env, &String::from_str(&env, "win1")).unwrap();
             assert_eq!(window.length, 2);
             assert_eq!(window.threshold_bps, 300);
@@ -338,7 +342,11 @@ mod tests {
                 WindowUnit::Hours,
                 500,
             );
+        });
+        env.as_contract(&contract_id, || {
             remove_window(&env, &admin, String::from_str(&env, "win1"));
+        });
+        env.as_contract(&contract_id, || {
             let window = get_window(&env, &String::from_str(&env, "win1"));
             assert!(window.is_none());
         });
@@ -356,6 +364,8 @@ mod tests {
                 WindowUnit::Hours,
                 500,
             );
+        });
+        env.as_contract(&contract_id, || {
             create_window(
                 &env,
                 &admin,
@@ -364,6 +374,8 @@ mod tests {
                 WindowUnit::Minutes,
                 300,
             );
+        });
+        env.as_contract(&contract_id, || {
             let all = get_all_windows(&env);
             assert_eq!(all.len(), 2);
         });
@@ -448,6 +460,8 @@ mod tests {
                 WindowUnit::Hours,
                 500,
             );
+        });
+        env.as_contract(&contract_id, || {
             create_window(
                 &env,
                 &admin,

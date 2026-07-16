@@ -248,9 +248,12 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op, String::from_str(&env, "Operator 1"));
+        });
+        env.as_contract(&contract_id, || {
             assert!(is_operator(&env, &op));
-
             remove_operator(&env, &admin, &op);
+        });
+        env.as_contract(&contract_id, || {
             assert!(!is_operator(&env, &op));
         });
     }
@@ -274,8 +277,11 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op1, String::from_str(&env, "Op 1"));
+        });
+        env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op2, String::from_str(&env, "Op 2"));
-
+        });
+        env.as_contract(&contract_id, || {
             let all = get_all_operators(&env);
             assert_eq!(all.len(), 2);
         });
@@ -289,9 +295,14 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op1, String::from_str(&env, "Op 1"));
+        });
+        env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op2, String::from_str(&env, "Op 2"));
+        });
+        env.as_contract(&contract_id, || {
             remove_operator(&env, &admin, &op1);
-
+        });
+        env.as_contract(&contract_id, || {
             let active = get_active_operators(&env);
             assert_eq!(active.len(), 1);
             assert_eq!(active.get(0).unwrap().address, op2);
@@ -334,10 +345,17 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op, String::from_str(&env, "Op 1"));
+        });
+        env.as_contract(&contract_id, || {
             remove_operator(&env, &admin, &op);
+        });
+        env.as_contract(&contract_id, || {
             assert!(!is_operator(&env, &op));
-
+        });
+        env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op, String::from_str(&env, "Op 1 v2"));
+        });
+        env.as_contract(&contract_id, || {
             assert!(is_operator(&env, &op));
         });
     }

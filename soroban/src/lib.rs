@@ -1608,16 +1608,10 @@ impl BridgeWatchContract {
             panic!("signature has expired");
         }
 
-        let payload_hash: BytesN<32> = env.crypto().sha256(&message).into();
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&ConfigDataKey::SigCache(payload_hash.clone()))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-
+        // Nonce replay must be checked before the signature cache below:
+        // the cache is keyed only by message payload, so resubmitting the
+        // exact same signed payload (a textbook replay attack) would
+        // otherwise short-circuit straight past replay detection.
         let last_nonce = env
             .storage()
             .persistent()
@@ -1625,6 +1619,20 @@ impl BridgeWatchContract {
             .unwrap_or(0);
         if signature.nonce <= last_nonce {
             panic!("nonce replay detected");
+        }
+
+        let payload_hash: BytesN<32> = env.crypto().sha256(&message).into();
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&ConfigDataKey::SigCache(payload_hash.clone()))
+            .unwrap_or(false)
+        {
+            env.storage().persistent().set(
+                &ConfigDataKey::SignerNonce(signature.signer_id.clone()),
+                &signature.nonce,
+            );
+            return true;
         }
 
         let mut data = Bytes::new(&env);
@@ -10029,6 +10037,11 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[7u8; 32]);
         let proposal_id = client.propose_upgrade(&admin, &new_hash, &false, &None, &None);
 
+        // Check events right after the call that emits them — interleaving
+        // further client calls (even read-only ones) before inspecting
+        // env.events() can leave earlier events out of the recorded set.
+        assert_has_event(&env, &client.address, symbol_short!("up_prop"));
+
         assert_eq!(proposal_id, 1);
         let pending = client.get_pending_upgrade().unwrap();
         assert_eq!(pending.proposal_id, 1);
@@ -10037,8 +10050,6 @@ mod tests {
         assert_eq!(pending.required_approvals, 1);
         assert_eq!(pending.approvals.len(), 1);
         assert_eq!(pending.approvals.get(0).unwrap(), admin);
-
-        assert_has_event(&env, &client.address, symbol_short!("up_prop"));
     }
 
     #[test]
@@ -10081,7 +10092,10 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[10u8; 32]);
         client.propose_upgrade(&admin, &new_hash, &true, &None, &None);
         client.approve_upgrade(&super_admin, &1);
+        assert_has_event(&env, &client.address, symbol_short!("up_appr"));
+
         client.execute_upgrade(&admin, &1);
+        assert_has_event(&env, &client.address, symbol_short!("up_exec"));
 
         assert!(client.get_pending_upgrade().is_none());
         assert_eq!(client.get_contract_version(), 2);
@@ -10093,9 +10107,6 @@ mod tests {
         assert_eq!(record.proposal_id, 1);
         assert!(record.emergency);
         assert!(!record.is_rollback);
-
-        assert_has_event(&env, &client.address, symbol_short!("up_appr"));
-        assert_has_event(&env, &client.address, symbol_short!("up_exec"));
     }
 
     #[test]
@@ -10106,9 +10117,9 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[11u8; 32]);
         client.propose_upgrade(&admin, &new_hash, &false, &None, &None);
         client.cancel_upgrade(&admin, &1, &String::from_str(&env, "no longer needed"));
+        assert_has_event(&env, &client.address, symbol_short!("up_cncl"));
 
         assert!(client.get_pending_upgrade().is_none());
-        assert_has_event(&env, &client.address, symbol_short!("up_cncl"));
     }
 
     #[test]
