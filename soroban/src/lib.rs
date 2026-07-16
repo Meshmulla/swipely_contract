@@ -1,6 +1,13 @@
 #![no_std]
 #![allow(clippy::too_many_arguments)]
 
+// Only needed by batch_query's test-only JSON serialization helpers below;
+// the wasm release build has no global allocator wired up (soroban-sdk's
+// bump allocator is opt-in via its "alloc" feature, which isn't enabled
+// here), so this must stay test-only rather than being declared unconditionally.
+#[cfg(test)]
+extern crate alloc;
+
 // governance and insurance_pool are standalone contracts — only compiled for
 // tests (native target) to avoid Wasm symbol conflicts with BridgeWatchContract.
 pub mod acl;
@@ -15,7 +22,6 @@ pub mod batch_query;
 #[cfg(test)]
 pub mod circuit_breaker;
 pub mod emergency_fund_recovery;
-pub mod escrow_contract;
 #[cfg(test)]
 pub mod governance;
 #[cfg(test)]
@@ -1287,13 +1293,41 @@ impl BridgeWatchContract {
         bridge_uptime_score: u32,
     ) {
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
+        Self::submit_health_internal(
+            env,
+            caller,
+            asset_code,
+            health_score,
+            liquidity_score,
+            price_stability_score,
+            bridge_uptime_score,
+        );
+    }
 
+    /// Core of `submit_health`, without the `check_permission()` call.
+    ///
+    /// `submit_health_signed` already checks the caller's permission (and
+    /// thus calls `require_auth()`) before verifying the signature; calling
+    /// `submit_health` from there would require_auth() the same address
+    /// again within the same invocation, which soroban rejects ("frame is
+    /// already authorized").
+    fn submit_health_internal(
+        env: Env,
+        caller: Address,
+        asset_code: String,
+        health_score: u32,
+        liquidity_score: u32,
+        price_stability_score: u32,
+        bridge_uptime_score: u32,
+    ) {
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
-        // Check if caller is a trusted source (if any sources are registered)
+        // Check if caller is a trusted source (if any sources are registered).
+        // The admin is exempt, same as the role check in check_permission().
+        let admin: Address = env.storage().instance().get(&keys::ADMIN).unwrap();
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if caller != admin && !active_sources.is_empty() {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }
@@ -1344,7 +1378,13 @@ impl BridgeWatchContract {
     /// the same ledger timestamp. A `health_up` event is emitted per asset.
     pub fn submit_health_batch(env: Env, caller: Address, records: Vec<HealthScoreBatch>) {
         Self::check_permission(&env, &caller, AdminRole::HealthSubmitter);
+        Self::submit_health_batch_internal(env, caller, records);
+    }
 
+    /// Core of `submit_health_batch`, without the `check_permission()` call —
+    /// see `submit_health_internal` for why `submit_health_batch_signed`
+    /// needs this.
+    fn submit_health_batch_internal(env: Env, caller: Address, records: Vec<HealthScoreBatch>) {
         if records.len() > 20 {
             panic!("batch size exceeds the maximum of 20 records");
         }
@@ -1411,13 +1451,26 @@ impl BridgeWatchContract {
         source: String,
     ) {
         Self::check_permission(&env, &caller, AdminRole::PriceSubmitter);
+        Self::submit_price_internal(env, caller, asset_code, price, source);
+    }
 
+    /// Core of `submit_price`, without the `check_permission()` call — see
+    /// `submit_health_internal` for why `submit_price_signed` needs this.
+    fn submit_price_internal(
+        env: Env,
+        caller: Address,
+        asset_code: String,
+        price: i128,
+        source: String,
+    ) {
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
-        // Check if caller is a trusted source (if any sources are registered)
+        // Check if caller is a trusted source (if any sources are registered).
+        // The admin is exempt, same as the role check in check_permission().
+        let admin: Address = env.storage().instance().get(&keys::ADMIN).unwrap();
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if caller != admin && !active_sources.is_empty() {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }
@@ -1559,16 +1612,10 @@ impl BridgeWatchContract {
             panic!("signature has expired");
         }
 
-        let payload_hash: BytesN<32> = env.crypto().sha256(&message).into();
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&ConfigDataKey::SigCache(payload_hash.clone()))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-
+        // Nonce replay must be checked before the signature cache below:
+        // the cache is keyed only by message payload, so resubmitting the
+        // exact same signed payload (a textbook replay attack) would
+        // otherwise short-circuit straight past replay detection.
         let last_nonce = env
             .storage()
             .persistent()
@@ -1576,6 +1623,20 @@ impl BridgeWatchContract {
             .unwrap_or(0);
         if signature.nonce <= last_nonce {
             panic!("nonce replay detected");
+        }
+
+        let payload_hash: BytesN<32> = env.crypto().sha256(&message).into();
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&ConfigDataKey::SigCache(payload_hash.clone()))
+            .unwrap_or(false)
+        {
+            env.storage().persistent().set(
+                &ConfigDataKey::SignerNonce(signature.signer_id.clone()),
+                &signature.nonce,
+            );
+            return true;
         }
 
         let mut data = Bytes::new(&env);
@@ -1672,7 +1733,7 @@ impl BridgeWatchContract {
         );
         Self::verify_signature(env.clone(), message, signature);
 
-        Self::submit_health(
+        Self::submit_health_internal(
             env,
             caller,
             asset_code,
@@ -1704,7 +1765,7 @@ impl BridgeWatchContract {
 
         Self::verify_signature(env.clone(), message, signature);
 
-        Self::submit_price(env, caller, asset_code, price, source);
+        Self::submit_price_internal(env, caller, asset_code, price, source);
     }
 
     /// Submit a batch of health records with multi-sig support.
@@ -1731,7 +1792,7 @@ impl BridgeWatchContract {
 
         Self::verify_multi_sig(env.clone(), batch_message, signatures);
 
-        Self::submit_health_batch(env, caller, records);
+        Self::submit_health_batch_internal(env, caller, records);
     }
 
     /// Build canonical health payload bytes for signature coverage.
@@ -1855,6 +1916,7 @@ impl BridgeWatchContract {
     /// `AssetManager`.
     pub fn pause_asset(env: Env, caller: Address, asset_code: String) {
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
+        Self::assert_asset_not_locked(&env, &asset_code);
         let mut status = Self::load_asset_health(&env, &asset_code);
         if !status.active {
             panic!("cannot pause a deregistered asset");
@@ -1877,6 +1939,7 @@ impl BridgeWatchContract {
     /// `AssetManager`.
     pub fn unpause_asset(env: Env, caller: Address, asset_code: String) {
         Self::check_permission(&env, &caller, AdminRole::AssetManager);
+        Self::assert_asset_not_locked(&env, &asset_code);
         let mut status = Self::load_asset_health(&env, &asset_code);
         if !status.active {
             panic!("cannot unpause a deregistered asset");
@@ -4450,6 +4513,24 @@ impl BridgeWatchContract {
         description: String,
     ) {
         caller.require_auth();
+        Self::set_config_internal(env, caller, category, name, value, description);
+    }
+
+    /// Core of `set_config`, without the `require_auth()` call.
+    ///
+    /// `set_config_bulk` already authorizes the caller once up front; calling
+    /// `set_config` per item would require_auth() the same address again
+    /// within the same invocation, which soroban rejects ("frame is already
+    /// authorized"). This lets both entrypoints share the same validation and
+    /// storage logic while only authorizing once each.
+    fn set_config_internal(
+        env: Env,
+        caller: Address,
+        category: ConfigCategory,
+        name: String,
+        value: i128,
+        description: String,
+    ) {
         Self::assert_not_globally_paused(&env);
         Self::check_no_pending_transfer(&env);
 
@@ -4602,7 +4683,7 @@ impl BridgeWatchContract {
         let keys: Vec<(ConfigCategory, String)> = env
             .storage()
             .instance()
-            .get(&keys::CONFIG_KEYS)
+            .get(&DataKey::ConfigKeys)
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut entries: Vec<ConfigEntry> = Vec::new(&env);
@@ -4673,10 +4754,11 @@ impl BridgeWatchContract {
             panic!("config: bulk update list must contain at most 20 items");
         }
 
-        // Apply each update — uses the same logic as set_config()
+        // Apply each update — uses the same logic as set_config(), minus the
+        // auth check (already done once above; see set_config_internal).
         for i in 0..updates.len() {
             let u = updates.get(i).unwrap();
-            Self::set_config(
+            Self::set_config_internal(
                 env.clone(),
                 caller.clone(),
                 u.category,
@@ -4741,7 +4823,7 @@ impl BridgeWatchContract {
                 .get::<_, ConfigEntry>(&key)
                 .is_none()
             {
-                Self::set_config(
+                Self::set_config_internal(
                     env.clone(),
                     caller.clone(),
                     cat,
@@ -9961,6 +10043,11 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[7u8; 32]);
         let proposal_id = client.propose_upgrade(&admin, &new_hash, &false, &None, &None);
 
+        // Check events right after the call that emits them — interleaving
+        // further client calls (even read-only ones) before inspecting
+        // env.events() can leave earlier events out of the recorded set.
+        assert_has_event(&env, &client.address, symbol_short!("up_prop"));
+
         assert_eq!(proposal_id, 1);
         let pending = client.get_pending_upgrade().unwrap();
         assert_eq!(pending.proposal_id, 1);
@@ -9969,8 +10056,6 @@ mod tests {
         assert_eq!(pending.required_approvals, 1);
         assert_eq!(pending.approvals.len(), 1);
         assert_eq!(pending.approvals.get(0).unwrap(), admin);
-
-        assert_has_event(&env, &client.address, symbol_short!("up_prop"));
     }
 
     #[test]
@@ -10013,7 +10098,10 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[10u8; 32]);
         client.propose_upgrade(&admin, &new_hash, &true, &None, &None);
         client.approve_upgrade(&super_admin, &1);
+        assert_has_event(&env, &client.address, symbol_short!("up_appr"));
+
         client.execute_upgrade(&admin, &1);
+        assert_has_event(&env, &client.address, symbol_short!("up_exec"));
 
         assert!(client.get_pending_upgrade().is_none());
         assert_eq!(client.get_contract_version(), 2);
@@ -10025,9 +10113,6 @@ mod tests {
         assert_eq!(record.proposal_id, 1);
         assert!(record.emergency);
         assert!(!record.is_rollback);
-
-        assert_has_event(&env, &client.address, symbol_short!("up_appr"));
-        assert_has_event(&env, &client.address, symbol_short!("up_exec"));
     }
 
     #[test]
@@ -10038,9 +10123,9 @@ mod tests {
         let new_hash = BytesN::from_array(&env, &[11u8; 32]);
         client.propose_upgrade(&admin, &new_hash, &false, &None, &None);
         client.cancel_upgrade(&admin, &1, &String::from_str(&env, "no longer needed"));
+        assert_has_event(&env, &client.address, symbol_short!("up_cncl"));
 
         assert!(client.get_pending_upgrade().is_none());
-        assert_has_event(&env, &client.address, symbol_short!("up_cncl"));
     }
 
     #[test]

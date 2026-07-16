@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
 
 // Import the contract and client
-use bridge_watch_soroban::{AdminRole, BridgeWatchContract, BridgeWatchContractClient};
+use swipely_contracts::{AdminRole, BridgeWatchContract, BridgeWatchContractClient};
 
 fn setup() -> (
     Env,
@@ -14,6 +14,7 @@ fn setup() -> (
 ) {
     let env = Env::default();
     env.mock_all_auths();
+    env.ledger().set_timestamp(1_000_000);
 
     let contract_id = env.register_contract(None, BridgeWatchContract);
     let client = BridgeWatchContractClient::new(&env, &contract_id);
@@ -25,9 +26,9 @@ fn setup() -> (
     client.initialize(&admin);
 
     // Grant roles
-    client.grant_role(&admin, &manager, AdminRole::AssetManager);
-    client.grant_role(&admin, &submitter, AdminRole::HealthSubmitter);
-    client.grant_role(&admin, &submitter, AdminRole::PriceSubmitter);
+    client.grant_role(&admin, &manager, &AdminRole::AssetManager);
+    client.grant_role(&admin, &submitter, &AdminRole::HealthSubmitter);
+    client.grant_role(&admin, &submitter, &AdminRole::PriceSubmitter);
 
     (env, client, admin, manager, submitter)
 }
@@ -214,7 +215,7 @@ fn test_submit_health_blocked_when_locked() {
     client.lock_asset(&admin, &asset_code, &String::from_str(&env, "Under review"));
 
     // Try to submit health - should panic
-    client.submit_health(&submitter, &asset_code, 95, 90, 92, 88);
+    client.submit_health(&submitter, &asset_code, &95, &90, &92, &88);
 }
 
 #[test]
@@ -232,7 +233,7 @@ fn test_submit_price_blocked_when_locked() {
     client.submit_price(
         &submitter,
         &asset_code,
-        1_000_000,
+        &1_000_000,
         &String::from_str(&env, "oracle1"),
     );
 }
@@ -282,11 +283,11 @@ fn test_operations_work_after_unlock() {
     client.unlock_asset(&admin, &asset_code);
 
     // Operations should work now
-    client.submit_health(&submitter, &asset_code, 95, 90, 92, 88);
+    client.submit_health(&submitter, &asset_code, &95, &90, &92, &88);
     client.submit_price(
         &submitter,
         &asset_code,
-        1_000_000,
+        &1_000_000,
         &String::from_str(&env, "oracle1"),
     );
     client.pause_asset(&admin, &asset_code);
@@ -485,7 +486,7 @@ fn test_complete_lock_maintenance_unlock_workflow() {
     client.register_asset(&admin, &asset_code);
 
     // Initial submission works
-    client.submit_health(&submitter, &asset_code, 95, 90, 92, 88);
+    client.submit_health(&submitter, &asset_code, &95, &90, &92, &88);
 
     // Lock for maintenance
     client.lock_asset(
@@ -507,11 +508,11 @@ fn test_complete_lock_maintenance_unlock_workflow() {
     assert!(!client.is_asset_locked(&asset_code));
 
     // Submissions work again
-    client.submit_health(&submitter, &asset_code, 96, 91, 93, 89);
+    client.submit_health(&submitter, &asset_code, &96, &91, &93, &89);
     client.submit_price(
         &submitter,
         &asset_code,
-        1_000_100,
+        &1_000_100,
         &String::from_str(&env, "oracle1"),
     );
 }
