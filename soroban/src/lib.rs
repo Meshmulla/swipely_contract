@@ -1323,9 +1323,11 @@ impl BridgeWatchContract {
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
-        // Check if caller is a trusted source (if any sources are registered)
+        // Check if caller is a trusted source (if any sources are registered).
+        // The admin is exempt, same as the role check in check_permission().
+        let admin: Address = env.storage().instance().get(&keys::ADMIN).unwrap();
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if caller != admin && !active_sources.is_empty() {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }
@@ -1464,9 +1466,11 @@ impl BridgeWatchContract {
         // Check if asset is locked
         Self::assert_asset_not_locked(&env, &asset_code);
 
-        // Check if caller is a trusted source (if any sources are registered)
+        // Check if caller is a trusted source (if any sources are registered).
+        // The admin is exempt, same as the role check in check_permission().
+        let admin: Address = env.storage().instance().get(&keys::ADMIN).unwrap();
         let active_sources = source_trust::get_active_trusted_sources(&env);
-        if !active_sources.is_empty() {
+        if caller != admin && !active_sources.is_empty() {
             // If sources are registered, enforce trust requirement
             source_trust::require_trusted_source(&env, &caller);
         }

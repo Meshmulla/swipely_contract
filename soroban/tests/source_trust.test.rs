@@ -14,6 +14,7 @@ fn setup() -> (
 ) {
     let env = Env::default();
     env.mock_all_auths();
+    env.ledger().set_timestamp(1_000_000);
 
     let contract_id = env.register_contract(None, BridgeWatchContract);
     let client = BridgeWatchContractClient::new(&env, &contract_id);
