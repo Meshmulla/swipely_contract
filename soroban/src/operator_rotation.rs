@@ -245,9 +245,15 @@ mod tests {
     fn test_remove_operator() {
         let (env, admin, contract_id) = setup();
         let op = Address::generate(&env);
+        // remove_operator refuses to drop the last active operator, so keep
+        // a second one around for this call to succeed.
+        let other = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op, String::from_str(&env, "Operator 1"));
+        });
+        env.as_contract(&contract_id, || {
+            add_operator(&env, &admin, &other, String::from_str(&env, "Operator 2"));
         });
         env.as_contract(&contract_id, || {
             assert!(is_operator(&env, &op));
@@ -342,9 +348,15 @@ mod tests {
     fn test_reactivate_operator() {
         let (env, admin, contract_id) = setup();
         let op = Address::generate(&env);
+        // remove_operator refuses to drop the last active operator, so keep
+        // a second one around for this call to succeed.
+        let other = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
             add_operator(&env, &admin, &op, String::from_str(&env, "Op 1"));
+        });
+        env.as_contract(&contract_id, || {
+            add_operator(&env, &admin, &other, String::from_str(&env, "Other"));
         });
         env.as_contract(&contract_id, || {
             remove_operator(&env, &admin, &op);
